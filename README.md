@@ -23,7 +23,7 @@
 
 
 ### Maintainer
-프론트	tnrud4685@gmail.com 이수경 
-RAG, BACKEND	theprismdata@gmail.com 신홍중
-CA	armyost1@gmail.com 김종표
-기획/설계	ljs9643@gmail.com 이재수
+프론트	tnrud4685@gmail.com 이수경 <br>
+RAG, BACKEND	theprismdata@gmail.com 신홍중 <br>
+CA	armyost1@gmail.com 김종표 <br>
+기획/설계	ljs9643@gmail.com 이재수<br>
