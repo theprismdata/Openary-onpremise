@@ -1,0 +1,51 @@
+database:
+  vector_db_postgres:
+    address: ""
+    port: 5432
+    id: ""
+    pwd: ""
+    database: ""
+  
+
+  opds_system_db:
+    address: ""
+    port: 32000
+    id: ""
+    pwd: ""
+    database: ""
+
+  mongodb:
+    mongo_host: ""
+    mongo_port: 31000
+    mongo_user: ""
+    mongo_passwd: ""
+    auth_source: ""
+
+minio:
+  address: ""
+  accesskey: 
+  secretkey: 
+
+mqtt:
+  address: ""
+  port: 20010
+  id: 
+  pwd: 
+  virtualhost: "/"
+
+RABBITMQ_SVC_QUEUE:
+  MINIO_Q_NAME: 'MINIO_LLM_PROC'
+  MINIO_EXCHNAGE_NAME: 'MINIO_LLM_PROC_Exchange'
+  MINIO_ROUTEKEY: 'MINIO_LLM_PROC_Route'
+
+  PREPROCES_Q_NAME: 'OPDS_PREP_REQ'
+  PREPROCES_EXCHANGE_NAME: 'OPDS_PREP_REQ_Exchange'
+  PREPROCES_ROUTEKEY: 'OPDS_PREP_REQ_Route'
+
+  SUMMARY_Q_NAME: 'OPDS_SUMMARY_REQ'
+  SUMMARY_EXCHANGE_NAME: 'OPDS_SUMMARY_REQ_Exchange'
+  SUMMARY_ROUTE_KEY: 'OPDS_SUMMARY_REQ_Route'
+
+  EMBEDDING_Q_NAME: 'OPDS_EMBEDDING_REQ'
+  EMBEDDING_EXCHANGE_NAME: 'OPDS_EMBEDDING_REQ_Exchange'
+  EMBEDDING_ROUTE_KEY: 'OPDS_EMBEDDING_REQ_Route'

@@ -1,0 +1,11 @@
+pymongo==4.9.1
+pika==1.3.2
+psycopg[binary,pool]
+PyYAML==6.0.2
+psycopg2==2.9.9
+langchain==0.3.1
+langchain_community==0.3.1
+langchain-openai==0.2.0
+nltk==3.9.1
+PyMySql==1.1.1
+pytz==2024.2

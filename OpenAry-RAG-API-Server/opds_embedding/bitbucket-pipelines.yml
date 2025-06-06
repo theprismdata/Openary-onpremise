@@ -1,0 +1,35 @@
+# Template docker-push
+
+# This template allows you to build and push your docker image to a Docker Hub account.
+# The workflow allows running tests, code linting and security scans on feature branches (as well as master).
+# The docker image will be validated and pushed to the docker registry after the code is merged to master.
+
+# Prerequisites: $DOCKERHUB_USERNAME, $DOCKERHUB_PASSWORD setup as deployment variables
+
+image: python:3.10
+
+pipelines:
+  default:
+    - step:
+        deployment: test
+        script:
+          - docker login -u $DOCKER_HUB_USER -p $DOCKER_HUB_PASSWORD
+          - docker build -t hongjoong/opds-embedding:0.0.1 .
+          - docker push hongjoong/opds-embedding:0.0.1
+        services:
+          - docker
+        caches:
+          - docker
+  branches:    
+    develop:      
+     - step:          
+        name: Build and test          
+        deployment: test          
+        script:            
+        - echo "Start build develop branch"           
+    master:     
+     - step:          
+        name: Build and test          
+        deployment: production          
+        script:            
+        - echo "Start build master branch"            

@@ -1,0 +1,83 @@
+langmodel:
+  RUN_MODE: LOCAL
+  API:
+    OpenAI:
+      apikey: ""
+      chat_model: "gpt-4o"
+
+    Claude:
+      apikey: ""
+      chat_model: "claude-3-sonnet-20240229"
+
+    huggingface:
+      model: "google/gemma-2-9b-it"
+      api_key: ""
+
+  LOCAL:
+    Ollama:
+      address: "http://localhost:11434"
+      chat_model: "qwen2.5:3b"
+
+embeddingmodel:
+  sentensetransformer:
+    embedding_model: "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
+
+minio:
+  address: "minio:9000"
+  accesskey: genai_minio
+  secretkey: openary_minio
+
+redis:
+  address: "redis://redis:6379"
+
+database:
+  vector_db_postgres:
+    address: "postgres"
+    port: 5432
+    id: ""
+    pwd: ""
+    database: "genai_svc_dev"
+
+  opds_system_db:
+    address: "mariadb"
+    port: 3306
+    id: ""
+    pwd: ""
+    database: "llm_dev"
+
+  mongodb:
+    mongo_host: "mongodb"
+    mongo_port: 27017
+    mongo_user: ""
+    mongo_passwd: ""
+    auth_source: "genai_svc_dev"
+    chat_history: "llm_chat_history"
+
+SECRET_KEY: ""
+REFRESH_TOKEN_SECRET_KEY: ""
+
+mgmt_rest_config:
+  port: 9001
+
+api_rest_config:
+  port: 9000
+
+external_svc:
+  management_service: "http://opds-mgmt:9001/mgmt" #internal
+
+mqtt:
+  address: "rabbitmq"
+  port: 5672
+  id: genai
+  pwd: openary
+  virtualhost: "/"
+
+RABBITMQ_SVC_QUEUE:
+  PREPROCES_Q_NAME: "OPDS_PREP_REQ"
+  PREPROCES_ROUTEKEY: "OPDS_PREP_REQ"
+
+  SUMMARY_Q_NAME: "OPDS_SUMMARY_REQ"
+  SUMMARY_ROUTE_KEY: "OPDS_SUMMARY_REQ"
+
+  EMBEDDING_Q_NAME: "OPDS_EMBEDDING_REQ"
+  EMBEDDING_ROUTE_KEY: "OPDS_EMBEDDING_REQ"
