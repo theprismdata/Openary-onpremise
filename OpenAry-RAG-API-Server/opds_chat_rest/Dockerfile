@@ -9,6 +9,8 @@ WORKDIR /app
 RUN mkdir -p /app/log
 RUN mkdir -p /app/embeddingmodel
 RUN mkdir -p /config
+
+COPY ./embeddingmodel /app/embeddingmodel
 COPY ./requirements.txt /app/requirements.txt
 COPY ./DataModel.py /app/DataModel.py
 COPY ./DBHandler.py /app/DBHandler.py

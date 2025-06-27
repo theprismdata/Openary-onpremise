@@ -81,7 +81,7 @@ ENV = os.getenv('ENVIRONMENT', 'development')
 if ENV == 'development':
     config_file = '../config/svc-set.debug.yaml'
 else:
-    config_file = '../config/svc-set.docker.yaml'
+    config_file = '../config/svc-set.yaml'
 
 # 설정 파일 존재 여부 확인
 if not os.path.exists(config_file):
