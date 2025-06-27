@@ -69,6 +69,10 @@ class LLMSelector:
         self._set_default_model()
 
     def download_ollama(self):
+        if not self.Ollama_model or not self.Ollama_address:
+            self.logger.warning("Ollama 모델 또는 주소가 설정되지 않아 Ollama 다운로드를 건너뜁니다.")
+            return
+            
         try:
             self.logger.info("Ollama model check")
             method = "api/tags"
@@ -98,9 +102,8 @@ class LLMSelector:
             else:
                 self.logger.info(f"Ollama {self.Ollama_model} found")
         except Exception as e:
-            print(f"Error connecting to Ollama server: {e}")
-            print("Please make sure the Ollama server is running (Ollama serve)")
-            sys.exit(1)
+            self.logger.warning(f"Ollama 서버 연결 오류: {e}")
+            self.logger.warning("Ollama 서버가 실행되지 않았거나 연결할 수 없습니다. Ollama 관련 기능을 건너뜁니다.")
 
     def _initialize_llms(self):
         """LLM 초기화"""
@@ -108,13 +111,15 @@ class LLMSelector:
             self.RUN_MODE = self.config['langmodel']['RUN_MODE']
             if self.RUN_MODE == 'LOCAL':
                 # Ollama 초기화
-                if 'Ollama' in self.config['langmodel']['LOCAL']:
+                if 'Ollama' in self.config['langmodel']['LOCAL'] and self.Ollama_model and self.Ollama_address:
                     self.models['Ollama'] = Ollama(
                         model=self.config['langmodel']['LOCAL']['Ollama']['chat_model'],
                         base_url=self.config['langmodel']['LOCAL']['Ollama']['address']
                     )
                     # load model
                     self.download_ollama()
+                else:
+                    self.logger.warning("LOCAL 모드이지만 Ollama 설정이 없습니다. 사용 가능한 모델이 없을 수 있습니다.")
             elif self.RUN_MODE == 'API':
                 # Claude 초기화
                 if 'Claude' in self.config['langmodel']['API']:
@@ -170,9 +175,12 @@ class LLMSelector:
 
         elif self.RUN_MODE == 'LOCAL':
             self.default_model = self.models.get('Ollama')
+            if self.default_model is None:
+                self.logger.warning("LOCAL 모드에서 사용 가능한 Ollama 모델이 없습니다.")
 
         if self.default_model is None:
-            raise ValueError("No LLM models available")
+            self.logger.warning("사용 가능한 LLM 모델이 없습니다. 일부 기능이 제한될 수 있습니다.")
+            # raise ValueError("No LLM models available")  # 오류 대신 경고로 처리
 
     def _classify_intent(self, question: str) -> QuestionIntent:
         """LLM을 사용하여 질문의 의도를 분류하는 함수"""
@@ -223,6 +231,10 @@ class LLMSelector:
                     classifier_llm = self.default_model
 
                 # LLM에 분류 요청
+                if classifier_llm is None:
+                    self.logger.warning("사용 가능한 분류용 LLM이 없습니다. GENERAL로 분류합니다.")
+                    return QuestionIntent.GENERAL
+                    
                 response = classifier_llm(classification_prompt.format(question=question))
 
                 # 응답에서 카테고리 추출
@@ -283,8 +295,11 @@ class LLMSelector:
             except Exception as e:
                 self.logger.error(f"Error selecting LLM: {str(e)}")
                 return self.default_model
-        else:
-            return self.models.get('Ollama')
+        else:  # LOCAL 모드
+            ollama_model = self.models.get('Ollama')
+            if ollama_model is None:
+                self.logger.warning("LOCAL 모드에서 사용 가능한 Ollama 모델이 없습니다.")
+            return ollama_model
 
     def get_llm_info(self, llm: LLM) -> str:
         """선택된 LLM 정보 반환"""

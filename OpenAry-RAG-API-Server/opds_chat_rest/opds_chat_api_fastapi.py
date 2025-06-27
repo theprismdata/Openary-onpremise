@@ -76,7 +76,19 @@ logger.addHandler(file_handler)
 logger.addHandler(stream_handler)
 
 ENV = os.getenv('ENVIRONMENT', 'development')
-config_file = f'../config/svc-set.{"debug." if ENV == "development" else ""}yaml'
+
+# 환경에 따른 설정 파일 선택
+if ENV == 'development':
+    config_file = '../config/svc-set.debug.yaml'
+else:
+    config_file = '../config/svc-set.docker.yaml'
+
+# 설정 파일 존재 여부 확인
+if not os.path.exists(config_file):
+    logger.error(f"설정 파일을 찾을 수 없습니다: {config_file}")
+    sys.exit(1)
+
+logger.info(f"환경: {ENV}, 설정 파일: {config_file}")
 
 with open(config_file) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
@@ -107,8 +119,25 @@ OPDS_RREP_ROUTE = RABBITMQ_SVC_QUEUE['PREPROCES_ROUTEKEY']
 openai_api_key = config['langmodel']['API']['OpenAI']['apikey']
 OpenAI_CHAT_MODEL = config['langmodel']['API']['OpenAI']['chat_model']
 
-Ollama_model = config['langmodel']['LOCAL']['Ollama']['chat_model']
-Ollama_address = config['langmodel']['LOCAL']['Ollama']['address']
+# Ollama 설정 확인
+langmodel_config = config.get('langmodel', {})
+# LOCAL 설정 확인
+local_model_config = langmodel_config.get('LOCAL', {})
+
+if 'Ollama' in local_model_config:
+    ollama_config = local_model_config['Ollama']
+    if ollama_config.get('chat_model') and ollama_config.get('address'):
+        Ollama_model = ollama_config['chat_model']
+        Ollama_address = ollama_config['address']
+        logger.info("Ollama 설정이 발견되었습니다.")
+    else:
+        logger.warning("Ollama 설정이 완전하지 않습니다. Ollama 관련 기능을 건너뜁니다.")
+        Ollama_model = None
+        Ollama_address = None
+else:
+    logger.warning("Ollama 설정을 찾을 수 없습니다. Ollama 관련 기능을 건너뜁니다.")
+    Ollama_model = None
+
 
 TAVILY_API_KEY  = config['agent']['Tavily']
 SERPER_KEY  = config['agent']['serperkey']
@@ -212,10 +241,15 @@ mecab_tagger = initialize_mecab()
 
 
 try:
-    llm_selector = LLMSelector(Ollama_model, Ollama_address, logger, config)
+    if Ollama_model and Ollama_address:
+        llm_selector = LLMSelector(Ollama_model, Ollama_address, logger, config)
+        logger.info("LLM Selector가 Ollama 모델과 함께 초기화되었습니다.")
+    else:
+        logger.warning("Ollama 모델이 설정되지 않았습니다. OpenAI만 사용 가능합니다.")
+        llm_selector = LLMSelector(None, None, logger, config)
     # llm_default = llm_selector.select_llm("default")  # 기본 LLM 설정
 except Exception as e:
-    print(f"Error initializing LLM selector: {e}")
+    logger.error(f"LLM selector 초기화 오류: {e}")
     sys.exit(1)
 
 mariadb_manager = DatabaseConnectionManager(logger,

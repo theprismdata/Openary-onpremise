@@ -13,11 +13,6 @@ langmodel:
       model: "google/gemma-2-9b-it"
       api_key: ""
 
-  LOCAL:
-    Ollama:
-      address: "http://localhost:11434"
-      chat_model: "qwen2.5:3b"
-
 embeddingmodel:
   sentensetransformer:
     embedding_model: "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
