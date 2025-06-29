@@ -52,6 +52,10 @@ database:
     port: 9200
     id: "admin"
     pwd: "admin"
+    use_ssl: true
+    verify_certs: false
+    ssl_assert_hostname: false
+    ssl_show_warn: false
     
   vector_db_qdrant:
     address: "qdrant"

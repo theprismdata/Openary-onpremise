@@ -10,6 +10,7 @@ services:
       - C:/temp/timezone:/etc/localtime:ro
     restart: always
     depends_on:
+      - openarychat-app
       - opds-chatapi
       - opds-mgmt
       - opds-embedding
@@ -24,6 +25,24 @@ services:
       - mongodb
       - qdrant
       - opensearch
+    networks:
+      - openary_network
+
+  # Web Application (Frontend)
+  openarychat-app:
+    image: hongjoong/openarychat-app:0.0.1
+    container_name: openarychat-app
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/svc-set.yaml:/config/svc-set.yaml:ro
+      - C:/temp/timezone:/etc/localtime:ro
+    environment:
+      - ENVIRONMENT=production
+    restart: always
+    depends_on:
+      - opds-chatapi
+      - opds-mgmt
     networks:
       - openary_network
 
@@ -299,12 +318,17 @@ services:
     environment:
       - cluster.name=opensearch-cluster
       - node.name=opensearch-node1
-      - discovery.seed_hosts=opensearch-node1
-      - cluster.initial_cluster_manager_nodes=opensearch-node1
+      - discovery.type=single-node
       - bootstrap.memory_lock=true
       - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
-      - "DISABLE_INSTALL_DEMO_CONFIG=true"
-      - "DISABLE_SECURITY_PLUGIN=true"
+      - "DISABLE_INSTALL_DEMO_CONFIG=false"
+      - "DISABLE_SECURITY_PLUGIN=false"
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=admin"
+      - network.host=0.0.0.0
+      - http.port=9200
+      - plugins.security.ssl.http.enabled=true
+      - plugins.security.allow_unsafe_democertificates=true
+      - plugins.security.allow_default_init_securityindex=true
     ulimits:
       memlock:
         soft: -1
@@ -327,7 +351,7 @@ services:
           cpus: '0.5'
           memory: 1G
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      test: ["CMD", "curl", "-k", "-u", "admin:admin", "https://localhost:9200/_cluster/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -343,8 +367,11 @@ services:
     ports:
       - "5601:5601"    # Dashboard port
     environment:
-      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
-      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+      OPENSEARCH_HOSTS: '["https://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "false"
+      OPENSEARCH_USERNAME: "admin"
+      OPENSEARCH_PASSWORD: "admin"
+      OPENSEARCH_SSL_VERIFICATIONMODE: "none"
     volumes:
       - C:/temp/timezone:/etc/localtime:ro
     depends_on:
