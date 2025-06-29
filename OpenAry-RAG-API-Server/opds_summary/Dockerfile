@@ -13,6 +13,8 @@ COPY ./requirements.txt /app/requirements.txt
 COPY ./check_token.py /app/check_token.py
 COPY ./Summary_Subscriber.py /app/Summary_Subscriber.py
 
+ENV ENVIRONMENT=production
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["python", "Summary_Subscriber.py"]

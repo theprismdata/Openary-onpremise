@@ -32,7 +32,7 @@ logger.setLevel(logging.DEBUG)
 
 f_format = logging.Formatter('[%(asctime)s][%(levelname)s|%(filename)s:%(lineno)s] --- %(message)s')
 
-path = "log/preprocess.log"
+path = "log/opds_mgmt_user.log"
 file_handler = TimedRotatingFileHandler(path,encoding='utf-8',
                                    when="h",
                                    interval=1,

@@ -14,6 +14,8 @@ RUN mkdir -p /config
 COPY ./requirements.txt /app/requirements.txt
 COPY ./Embedding_Subscriber.py /app/Embedding_Subscriber.py
 
+ENV ENVIRONMENT=production
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["python", "Embedding_Subscriber.py"]

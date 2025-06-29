@@ -19,5 +19,7 @@ COPY ./question_classifier.py /app/question_classifier.py
 COPY ./LLMIntentAnalyzer.py /app/LLMIntentAnalyzer.py
 COPY ./LLMSelector.py /app/LLMSelector.py
 
+ENV ENVIRONMENT=production
+
 RUN pip install --no-cache-dir -r requirements.txt
 CMD ["python", "opds_chat_api_fastapi.py"]

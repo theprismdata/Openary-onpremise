@@ -10,6 +10,8 @@ RUN mkdir -p /config
 COPY ./requirements.txt /app/requirements.txt
 COPY ./opds_mgmt_user.py /app/opds_mgmt_user.py
 
+ENV ENVIRONMENT=production
+
 RUN pip install --no-cache-dir -r requirements.txt
 
 CMD ["python", "opds_mgmt_user.py"]
