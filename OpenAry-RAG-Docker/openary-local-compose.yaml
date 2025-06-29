@@ -22,6 +22,8 @@ services:
       - mariadb
       - postgres
       - mongodb
+      - qdrant
+      - opensearch
     networks:
       - openary_network
 
@@ -212,6 +214,7 @@ services:
     environment:
       POSTGRES_USER: genai
       POSTGRES_PASSWORD: openary
+      POSTGRES_DB: genai_svc_dev
     ports:
       - "5432:5432"
     volumes:
@@ -219,7 +222,7 @@ services:
       - ./pgvector_init:/docker-entrypoint-initdb.d
       - C:/temp/timezone:/etc/localtime:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U genai"]
+      test: ["CMD-SHELL", "pg_isready -U genai -d genai_svc_dev"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -250,6 +253,120 @@ services:
     networks:
       - openary_network
 
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:v1.7.4
+    container_name: qdrant
+    ports:
+      - "6333:6333"    # HTTP API port
+      - "6334:6334"    # gRPC port
+    volumes:
+      - C:/temp/qdrant_data:/qdrant/storage
+      - C:/temp/timezone:/etc/localtime:ro
+    environment:
+      QDRANT__LOG_LEVEL: INFO
+      QDRANT__SERVICE__HOST: 0.0.0.0
+      QDRANT__SERVICE__HTTP_PORT: 6333
+      QDRANT__SERVICE__GRPC_PORT: 6334
+      QDRANT__STORAGE__STORAGE_PATH: /qdrant/storage
+      QDRANT__STORAGE__OPTIMIZERS_CONFIG__DEFAULT_SEGMENT_NUMBER: 2
+      QDRANT__STORAGE__OPTIMIZERS_CONFIG__MEMMAP_THRESHOLD: 20000
+      QDRANT__STORAGE__HNSW_CONFIG__ON_DISK: true
+      QDRANT__STORAGE__HNSW_CONFIG__M: 16
+      QDRANT__STORAGE__HNSW_CONFIG__EF_CONSTRUCT: 100
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    networks:
+      - openary_network
+
+  # OpenSearch
+  opensearch:
+    image: opensearchproject/opensearch:2.11.1
+    container_name: opensearch
+    environment:
+      - cluster.name=opensearch-cluster
+      - node.name=opensearch-node1
+      - discovery.seed_hosts=opensearch-node1
+      - cluster.initial_cluster_manager_nodes=opensearch-node1
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms1g -Xmx1g"
+      - "DISABLE_INSTALL_DEMO_CONFIG=true"
+      - "DISABLE_SECURITY_PLUGIN=true"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"    # REST API port (K8s에서 30000으로 매핑됨)
+      - "9600:9600"    # Performance Analyzer port
+    volumes:
+      - C:/temp/opensearch_data:/usr/share/opensearch/data
+      - C:/temp/timezone:/etc/localtime:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '0.5'
+          memory: 1G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - openary_network
+
+  # OpenSearch Dashboards
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:2.11.1
+    container_name: opensearch-dashboards
+    ports:
+      - "5601:5601"    # Dashboard port
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    volumes:
+      - C:/temp/timezone:/etc/localtime:ro
+    depends_on:
+      - opensearch
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.2'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - openary_network
+
 networks:
   openary_network:
     driver: bridge
@@ -266,4 +383,8 @@ volumes:
   pgdata:
     driver: local
   mongodb_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  opensearch_data:
     driver: local 

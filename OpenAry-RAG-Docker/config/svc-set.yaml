@@ -1,64 +1,80 @@
 langmodel:
-  RUN_MODE: API
+  RUN_MODE: API  # API or LOCAL
   API:
     OpenAI:
-      apikey: ""
+      apikey: "your-openai-api-key-here"
       chat_model: "gpt-4o"
 
     Claude:
-      apikey: ""
+      apikey: "your-claude-api-key-here"
       chat_model: "claude-3-7-sonnet-20250219"
 
     huggingface:
       model: "google/gemma-2-9b-it"
-      api_key: ""
+      api_key: "your-huggingface-api-key-here"
       max_token: 500
       temperature: 0.7
+
+  LOCAL:
+    ollama:
+      address: "http://ollama:11434"
+      chat_model: "llama3.1:8b"  # or any model you have pulled
     
 embeddingmodel:
   sentensetransformer:
     embedding_model: "BAAI/bge-m3"
 
 agent:
-  serperkey: ""
-  Tavily: ""
+  serperkey: "your-serper-api-key-here"
+  Tavily: "your-tavily-api-key-here"
 
 upstage:
-  apikey: ""
+  apikey: "your-upstage-api-key-here"
 
 minio:
-  address: ""
-  accesskey: ""
-  secretkey: ""
+  address: "opds-minio:9000"
+  accesskey: opds
+  secretkey: opds_pass
 
 redis:
-  address: "redis://redis:6379"
+  address: "redis://redis-stack:6379"
 
 database:
   vector_db_postgres:
-    address: ""
-    port: 
-    id: ""
-    pwd: ""
+    address: "pgvector"
+    port: 5432
+    id: "genai"
+    pwd: "openary"
     database: "genai_svc_dev"
 
+  vector_db_opensearch:
+    address: "opensearch"
+    port: 9200
+    id: "admin"
+    pwd: "admin"
+    
+  vector_db_qdrant:
+    address: "qdrant"
+    port: 6333
+    api-key: "qdrant_api_admin"
+    
   opds_system_db:
-    address: ""
-    port: 
-    id: ""
-    pwd: ""
+    address: "mariadb"
+    port: 3306
+    id: "genai"
+    pwd: "openary"
     database: "llm_dev"
 
   mongodb:
-    mongo_host: ""
-    mongo_port: 
-    mongo_user: ""
-    mongo_passwd: ""
-    auth_source: ""
-    chat_history: ""
+    mongo_host: "mongodb"
+    mongo_port: 27017
+    mongo_user: "genai"
+    mongo_passwd: "openary"
+    auth_source: "genai_svc_dev"
+    chat_history: "llm_chat_history"
 
-SECRET_KEY: ""
-REFRESH_TOKEN_SECRET_KEY: ""
+SECRET_KEY: "your-secret-key-here-generate-a-random-32-byte-hex-string"
+REFRESH_TOKEN_SECRET_KEY: "your-refresh-token-secret-key-here-generate-a-random-32-byte-hex-string"
 
 mgmt_rest_config:
   port: 9001
@@ -67,11 +83,11 @@ api_rest_config:
   port: 9000
 
 external_svc:
-  management_service: "http://opds-mgmt:9001/mgmt" #internal
+  management_service: "http://opds-mgmt:9001/mgmt"
 
 mqtt:
-  address: ""
-  port: 
+  address: "opds-rabbit-mq"
+  port: 5672
   id: opds
   pwd: opds_pass
   virtualhost: "/"
