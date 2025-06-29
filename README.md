@@ -108,10 +108,18 @@ graph TB
 ### 사전 요구사항
 
 - **Docker** 및 **Docker Compose** 설치 필요
-- **최소 시스템 요구사항:**
-  - RAM: 8GB 이상 권장
-  - Storage: 20GB 이상 여유 공간
-  - CPU: 4 코어 이상 권장
+- **시스템 요구사항 (실제 사용량 기준):**
+  - **RAM**: 
+    - **최소**: 8GB (기본 운영용)
+    - **권장**: 12GB 이상 (안정적 운영 + 여유분)
+    - **실제 사용량**: 약 6GB (17개 컨테이너)
+  - **Storage**: 
+    - **최소**: 30GB 이상 여유 공간
+    - **권장**: 50GB 이상 (문서 저장 + 로그 + 임베딩 데이터)
+  - **CPU**: 
+    - **최소**: 4 코어 이상
+    - **권장**: 6 코어 이상 (AI 처리 작업 고려)
+  - **네트워크**: 안정적인 인터넷 연결 (상용 LLM API 사용 시)
 
 ### 1. 프로젝트 클론
 
@@ -128,9 +136,8 @@ Docker 컴포즈 디렉토리로 이동:
 cd OpenAry-RAG-Docker
 ```
 
-### 3. 설정 파일 구성
-
-`config/svc-set.yaml` 파일에서 다음 설정을 **반드시 수정**하세요:
+### 3. Docker의 설정 파일 구성
+`OpenAry-RAG-Docker/config/svc-set.yaml` 파일에서 다음 설정을 **반드시 수정**하세요:
 
 ```yaml
 # ⚠️ 보안 중요: 다음 값들을 실제 값으로 변경하세요
@@ -251,6 +258,35 @@ docker-compose -f openary-local-compose.yaml ps
 
 ## 🔧 시스템 관리
 
+### 리소스 모니터링
+
+#### 실시간 리소스 사용량 확인:
+```bash
+# 모든 컨테이너 리소스 사용량 확인
+docker stats
+
+# 특정 컨테이너만 모니터링
+docker stats opensearch opds-chatapi opds-embedding
+
+# 한 번만 조회 (실시간 아님)
+docker stats --no-stream
+```
+
+#### 주요 리소스 사용 컨테이너 (참고):
+- **opensearch**: ~1.5GB RAM (검색 엔진)
+- **opds-chatapi**: ~1.9GB RAM (Chat API)
+- **opds-embedding**: ~1.8GB RAM (임베딩 서비스)
+- **전체 시스템**: 약 6GB RAM 사용 (17개 컨테이너)
+
+#### 리소스 부족 시 대처방법:
+```bash
+# 메모리 사용량이 높은 컨테이너 확인
+docker stats --format "table {{.Container}}\t{{.CPUPerc}}\t{{.MemUsage}}" --no-stream
+
+# 특정 서비스 재시작 (메모리 정리)
+docker-compose -f openary-local-compose.yaml restart opensearch
+```
+
 ### 로그 확인
 
 #### Windows:
@@ -295,9 +331,16 @@ docker system prune -a
 1. **포트 충돌**: 다른 서비스가 동일한 포트를 사용하는 경우
    - `docker-compose.yaml`에서 포트 번호 수정
 
-2. **메모리 부족**: 시스템 리소스 부족
-   - Docker 메모리 제한 증가
-   - 불필요한 서비스 중지
+2. **메모리 부족**: 시스템 리소스 부족 (실제 6GB+ 사용)
+   - **OpenSearch 메모리 부족 (가장 빈번)**:
+     ```bash
+     # OpenSearch 메모리 제한 증가 (docker-compose.yaml 수정)
+     # deploy.resources.limits.memory: "4g" (기본 2g에서 증가)
+     ```
+   - **전체 시스템 메모리 부족**:
+     - 시스템 RAM 12GB 이상 권장
+     - 불필요한 서비스 중지
+     - Docker Desktop 메모리 제한 증가
 
 3. **OpenAI API 키 오류**: API 키가 없거나 잘못된 경우
    - Ollama 로컬 모델 사용으로 전환
