@@ -2,3 +2,14 @@ OpenAry-RAG-API-Server/opds_chat_rest/__pycache__/
 OpenAry-RAG-API-Server/opds_chat_rest/log/
 OpenAry-RAG-API-Server/opds_chat_rest/embeddingmodel/
 OpenAry-RAG-API-Server/config/
+OpenAry-RAG-API-Server/opds_preprocess/tmp/
+OpenAry-RAG-API-Server/openary_front/nginx/logs/
+OpenAry-RAG-API-Server/opds_chat_rest/uploads/
+OpenAry-RAG-API-Server/opds_embedding/embeddingmodel/
+OpenAry-RAG-API-Server/opds_embedding/log/
+OpenAry-RAG-API-Server/opds_mgmt/log/
+OpenAry-RAG-API-Server/opds_preprocess/log/
+OpenAry-RAG-API-Server/opds_preprocess/__pycache__/
+OpenAry-RAG-API-Server/opds_summary/__pycache__/
+OpenAry-RAG-API-Server/opds_summary/log/
+OpenAry-RAG-API-Server/opds_embedding/README_VECTOR_DB.md

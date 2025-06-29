@@ -1,0 +1,269 @@
+services:
+  # NGINX Reverse Proxy
+  opds-nginx:
+    image: hongjoong/opds-nginx:0.0.1
+    container_name: opds-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - C:/temp/timezone:/etc/localtime:ro
+    restart: always
+    depends_on:
+      - opds-chatapi
+      - opds-mgmt
+      - opds-embedding
+      - opds-preprocess
+      - opds-summary
+      - ollama
+      - redis-stack
+      - opds-rabbit-mq
+      - opds-minio
+      - mariadb
+      - postgres
+      - mongodb
+    networks:
+      - openary_network
+
+  # Chat API Service
+  opds-chatapi:
+    image: hongjoong/opds-chatapi:0.0.1
+    container_name: opds-chatapi
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./config/svc-set.yaml:/config/svc-set.yaml:ro
+      - C:/temp/timezone:/etc/localtime:ro
+    restart: always
+    depends_on:
+      - redis-stack
+      - opds-rabbit-mq
+      - opds-minio
+    networks:
+      - openary_network
+
+  # Management Service
+  opds-mgmt:
+    image: hongjoong/opds-mgmt:0.0.1
+    container_name: opds-mgmt
+    ports:
+      - "9001:9001"
+    volumes:
+      - ./config/svc-set.yaml:/config/svc-set.yaml:ro
+      - C:/temp/timezone:/etc/localtime:ro
+    restart: always
+    depends_on:
+      - redis-stack
+      - opds-rabbit-mq
+    networks:
+      - openary_network
+
+  # Embedding Service (3 replicas for high availability)
+  opds-embedding:
+    image: hongjoong/opds-embedding:0.0.1
+    container_name: opds-embedding
+    volumes:
+      - ./config/svc-set.yaml:/config/svc-set.yaml:ro
+      - C:/temp/timezone:/etc/localtime:ro
+    restart: always
+    depends_on:
+      - redis-stack
+      - opds-rabbit-mq
+    networks:
+      - openary_network
+  
+
+  # Preprocess Service (3 replicas for high availability)
+  opds-preprocess:
+    image: hongjoong/opds-preprocess:0.0.1
+    container_name: opds-preprocess
+    volumes:
+      - ./config/svc-set.yaml:/config/svc-set.yaml:ro
+      - C:/temp/timezone:/etc/localtime:ro
+    restart: always
+    depends_on:
+      - redis-stack
+      - opds-rabbit-mq
+    networks:
+      - openary_network
+
+  # Summary Service
+  opds-summary:
+    image: hongjoong/opds-summary:0.0.1
+    container_name: opds-summary
+    volumes:
+      - ./config/svc-set.yaml:/config/svc-set.yaml:ro
+      - C:/temp/timezone:/etc/localtime:ro
+    restart: always
+    depends_on:
+      - redis-stack
+      - opds-rabbit-mq
+    networks:
+      - openary_network
+
+  # Ollama LLM Service
+  ollama:
+    image: ollama/ollama:0.5.0
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - C:/temp/ollama_data:/root/.ollama
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+        reservations:
+          cpus: '4'
+    networks:
+      - openary_network
+    # GPU 사용시 주석 해제
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+
+  # Redis Stack
+  redis-stack:
+    image: redis/redis-stack-server:latest
+    container_name: redis-stack
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+    restart: always
+    networks:
+      - openary_network
+
+  # RabbitMQ Message Queue
+  opds-rabbit-mq:
+    image: rabbitmq:3-management-alpine
+    container_name: opds-rabbit-mq
+    ports:
+      - "5672:5672"    # AMQP protocol port
+      - "15672:15672"  # Management UI port
+    environment:
+      RABBITMQ_DEFAULT_USER: opds
+      RABBITMQ_DEFAULT_PASS: opds_pass
+    volumes:
+      - C:/temp/rabbitmq_data:/var/lib/rabbitmq
+      - C:/temp/timezone:/etc/localtime:ro
+    restart: unless-stopped
+    networks:
+      - openary_network
+
+  # MinIO Object Storage
+  opds-minio:
+    image: minio/minio
+    container_name: opds-minio
+    ports:
+      - "9010:9000"    # API port
+      - "9011:9001"    # Console port
+    environment:
+      MINIO_ROOT_USER: opds
+      MINIO_ROOT_PASSWORD: opds_pass
+    command: minio server --console-address ":9001" /data
+    volumes:
+      - C:/temp/minio_data:/data
+      - C:/temp/timezone:/etc/localtime:ro
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 1G
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    restart: unless-stopped
+    networks:
+      - openary_network
+
+  mariadb:
+    image: mariadb:latest
+    container_name: mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: openary
+      MYSQL_USER: genai
+      MYSQL_PASSWORD: openary
+      MYSQL_DATABASE: llm_dev
+    ports:
+      - "3306:3306"
+    volumes:
+      - C:/temp/mariadb_data:/var/lib/mysql
+      - ./mariadb_init:/docker-entrypoint-initdb.d
+      - C:/temp/timezone:/etc/localtime:ro
+    restart: unless-stopped
+    networks:
+      - openary_network
+
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: pgvector
+    environment:
+      POSTGRES_USER: genai
+      POSTGRES_PASSWORD: openary
+    ports:
+      - "5432:5432"
+    volumes:
+      - C:/temp/pgdata:/var/lib/postgresql/data
+      - ./pgvector_init:/docker-entrypoint-initdb.d
+      - C:/temp/timezone:/etc/localtime:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U genai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - openary_network
+
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: genai
+      MONGO_INITDB_ROOT_PASSWORD: openary
+      MONGO_INITDB_DATABASE: genai_svc_dev
+    ports:
+      - "27017:27017"
+    volumes:
+      - C:/temp/mongodb_data:/data/db
+      - ./mongo_init/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+      - C:/temp/timezone:/etc/localtime:ro
+    command: mongod --auth
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/genai_svc_dev --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+    networks:
+      - openary_network
+
+networks:
+  openary_network:
+    driver: bridge
+
+volumes:
+  ollama_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+  minio_data:
+    driver: local
+  mariadb_data:
+    driver: local
+  pgdata:
+    driver: local
+  mongodb_data:
+    driver: local 

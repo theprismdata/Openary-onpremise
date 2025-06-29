@@ -1,5 +1,5 @@
 langmodel:
-  RUN_MODE: LOCAL
+  RUN_MODE: API
   API:
     OpenAI:
       apikey: ""
@@ -7,51 +7,55 @@ langmodel:
 
     Claude:
       apikey: ""
-      chat_model: "claude-3-sonnet-20240229"
+      chat_model: "claude-3-7-sonnet-20250219"
 
     huggingface:
       model: "google/gemma-2-9b-it"
       api_key: ""
-
-  LOCAL:
-    Ollama:
-      address: "http://localhost:11434"
-      chat_model: "qwen2.5:3b"
-
+      max_token: 500
+      temperature: 0.7
+    
 embeddingmodel:
   sentensetransformer:
-    embedding_model: "snunlp/KR-SBERT-V40K-klueNLI-augSTS"
+    embedding_model: "BAAI/bge-m3"
+
+agent:
+  serperkey: ""
+  Tavily: ""
+
+upstage:
+  apikey: ""
 
 minio:
-  address: "minio:9000"
-  accesskey: genai_minio
-  secretkey: openary_minio
+  address: ""
+  accesskey: ""
+  secretkey: ""
 
 redis:
   address: "redis://redis:6379"
 
 database:
   vector_db_postgres:
-    address: "postgres"
-    port: 5432
+    address: ""
+    port: 
     id: ""
     pwd: ""
     database: "genai_svc_dev"
 
   opds_system_db:
-    address: "mariadb"
-    port: 3306
+    address: ""
+    port: 
     id: ""
     pwd: ""
     database: "llm_dev"
 
   mongodb:
-    mongo_host: "mongodb"
-    mongo_port: 27017
+    mongo_host: ""
+    mongo_port: 
     mongo_user: ""
     mongo_passwd: ""
-    auth_source: "genai_svc_dev"
-    chat_history: "llm_chat_history"
+    auth_source: ""
+    chat_history: ""
 
 SECRET_KEY: ""
 REFRESH_TOKEN_SECRET_KEY: ""
@@ -66,10 +70,10 @@ external_svc:
   management_service: "http://opds-mgmt:9001/mgmt" #internal
 
 mqtt:
-  address: "rabbitmq"
-  port: 5672
-  id: genai
-  pwd: openary
+  address: ""
+  port: 
+  id: opds
+  pwd: opds_pass
   virtualhost: "/"
 
 RABBITMQ_SVC_QUEUE:

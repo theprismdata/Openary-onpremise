@@ -1,5 +1,6 @@
 import json
 import re
+from langchain_core.messages import HumanMessage
 
 class LLMIntentAnalyzer:
     """LLM을 활용하여 사용자 질문의 의도를 분석하는 강화된 클래스"""
@@ -80,8 +81,19 @@ class LLMIntentAnalyzer:
 }}
 """
             # LLM 호출
-            response_obj  = llm(prompt.format(question=question))
-
+            try:
+                prompt_str = prompt.format(question=question)
+                self.logger.info(f"Claude API 호출 시작")
+                
+                # Claude API 호출 - 메시지 형식
+                messages = [HumanMessage(content=prompt_str)]
+                response_obj = llm.invoke(messages)
+                
+                self.logger.info(f"Claude API 응답 수신: {type(response_obj)}")
+                
+            except Exception as invoke_error:
+                self.logger.error(f"Claude API 호출 오류: {str(invoke_error)}")
+                
             # 다양한 LLM 응답 형식 처리
             if hasattr(response_obj, 'content'):  # ChatAnthropic(Claude) 등의 경우
                 response = response_obj.content
@@ -173,7 +185,34 @@ class LLMIntentAnalyzer:
     """
 
             # LLM 호출
-            response_obj = classifier_llm(prompt.format(text=text[:1000]))  # 텍스트 길이 제한
+            try:
+                # 안전한 import 시도
+                try:
+                    from langchain_core.messages import HumanMessage
+                except ImportError:
+                    try:
+                        from langchain.schema import HumanMessage
+                    except ImportError:
+                        from langchain.schema.messages import HumanMessage
+                
+                prompt_str = prompt.format(text=text)
+                self.logger.info(f"Claude API 호출 시작")
+                
+                # Claude API 호출 - 메시지 형식
+                messages = [HumanMessage(content=prompt_str)]
+                response_obj = classifier_llm.invoke(messages)
+                
+                self.logger.info(f"Claude API 응답 수신: {type(response_obj)}")
+                
+            except Exception as invoke_error:
+                self.logger.error(f"Claude API 호출 오류: {str(invoke_error)}")
+                # 더 자세한 오류 정보
+                import traceback
+                self.logger.error(f"상세 오류: {traceback.format_exc()}")
+                
+                # fallback으로 키워드 기반 분석 시도
+                self.logger.info("키워드 기반 분석으로 fallback")
+                return {"is_technical": False, "confidence": 0.5, "method": "error_fallback"}
 
             # 응답 처리
             if hasattr(response_obj, 'content'):
@@ -313,7 +352,7 @@ class LLMIntentAnalyzer:
         # 직접 매칭 실패 시 LLM 분석 시도
         try:
             # LLM 선택
-            llm = self._get_analysis_llm()
+            intent_analysis_by_claude_llm = self._get_analysis_llm()
 
             # 파일명 목록
             file_names_str = ", ".join(file_names)
@@ -339,7 +378,28 @@ class LLMIntentAnalyzer:
     }}
     """
             # LLM 호출
-            response_obj  = llm(prompt.format(question=question, file_list=file_names_str))
+            try:
+                # 안전한 import 시도
+                from langchain_core.messages import HumanMessage
+                
+                prompt_str = prompt.format(question=question, file_list=file_names_str)
+                self.logger.info(f"Claude API 호출 시작")
+                
+                # Claude API 호출 - 메시지 형식
+                messages = [HumanMessage(content=prompt_str)]
+                response_obj = intent_analysis_by_claude_llm.invoke(messages)
+                
+                self.logger.info(f"Claude API 응답 수신: {type(response_obj)}")
+                
+            except Exception as invoke_error:
+                self.logger.error(f"Claude API 호출 오류: {str(invoke_error)}")
+                # 더 자세한 오류 정보
+                import traceback
+                self.logger.error(f"상세 오류: {traceback.format_exc()}")
+                
+                # fallback으로 키워드 기반 분석 시도
+                self.logger.info("키워드 기반 분석으로 fallback")
+                return {"is_specific_file": False}
 
             # 다양한 LLM 응답 형식 처리
             if hasattr(response_obj, 'content'):  # ChatAnthropic(Claude) 등의 경우

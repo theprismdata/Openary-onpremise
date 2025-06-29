@@ -37,14 +37,20 @@ if not os.path.exists("log"):
 
 f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
+# 파일 핸들러
 path = "log/summary.log"
-handler = TimedRotatingFileHandler(path,
-                                   when="h",
-                                   interval=1,
-                                   backupCount=24)
-handler.namer = lambda name: name + ".txt"
-handler.setFormatter(f_format)
-logger.addHandler(handler)
+file_handler = TimedRotatingFileHandler(path,
+                                        when="h",
+                                        interval=1,
+                                        backupCount=24)
+file_handler.namer = lambda name: name + ".txt"
+file_handler.setFormatter(f_format)
+logger.addHandler(file_handler)
+
+# 콘솔 핸들러 (표준출력)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(f_format)
+logger.addHandler(console_handler)
 
 # 설정 값 추출
 mqtt_info = config['mqtt']
@@ -145,17 +151,17 @@ def update_document_status(doc_id, summary, status="complete"):
         with conn.cursor() as cs:
             end_time = datetime.now(timezone('Asia/Seoul')).strftime("%Y-%m-%d %H:%M:%S.%f")
 
-            # 특수 문자 제거 및 이스케이프 처리
-            summary = re.sub('[-=+,#/\?:^$.@*\"※~&%ㆍ!』\\' |\(\)\[\]\ < \ > `\'…》]', '', summary)
-            summary = summary.replace('"', '\\"')  # 따옴표 이스케이프
+            # 특수 문자 제거 (공백은 유지)
+            summary = re.sub(r'[-=+,#/\?:^$.@*"※~&%ㆍ!』\\\'|()[\]<>`\'…》]', '', summary)
 
+            # 파라미터화된 쿼리 사용 (SQL 인젝션 방지)
             sql = f"""UPDATE {opds_system_db["database"]}.tb_llm_doc 
-                      SET summary = "{summary}", 
-                          process_end = "{end_time}", 
-                          status = "{status}" 
-                      WHERE id = {doc_id}"""
+                      SET summary = %s, 
+                          process_end = %s, 
+                          status = %s 
+                      WHERE id = %s"""
             try:
-                cs.execute(sql)
+                cs.execute(sql, (summary, end_time, status, doc_id))
                 conn.commit()
                 logger.debug(f"Updated document status for doc_id: {doc_id}")
             except Exception as e:
@@ -186,16 +192,24 @@ def process_document_summary(user_code, doc_id, file_name, clean_doc):
         update_mongo_summary_status(user_code, file_name, doc_id)
         return
 
-    # 문서 내용 제한 (토큰 제한을 위해)
-    clean_doc = clean_doc[:1000]
-
-    # 토큰 수 계산
+    # 토큰 수 계산 (전체 문서)
     num_tokens = token_counter(clean_doc, OPENAI_CHAT_MODEL)
     logger.info(f"User {user_code} File Index {doc_id} Summary request token length: {num_tokens}")
 
+    # 긴 문서의 경우 청크로 나누어 처리
+    max_chunk_size = 4000  # 모델의 컨텍스트 윈도우에 맞게 조정
+    
     try:
-        # LangChain 문서 생성
-        lc_doc = [Document(page_content=clean_doc, metadata={"source": file_name})]
+        if len(clean_doc) <= max_chunk_size:
+            # 짧은 문서: 그대로 처리
+            lc_doc = [Document(page_content=clean_doc, metadata={"source": file_name})]
+        else:
+            # 긴 문서: 청크로 나누어 처리
+            chunks = []
+            for i in range(0, len(clean_doc), max_chunk_size):
+                chunk = clean_doc[i:i + max_chunk_size]
+                chunks.append(Document(page_content=chunk, metadata={"source": f"{file_name}_chunk_{i//max_chunk_size + 1}"}))
+            lc_doc = chunks
 
         # 요약 체인 실행
         logger.debug(f"User {user_code} File Index {doc_id} in LLM summary")

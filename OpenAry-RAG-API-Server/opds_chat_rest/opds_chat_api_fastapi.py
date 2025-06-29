@@ -1327,11 +1327,12 @@ class HybridResponseStreamer:
                 ])
 
             try:
-                response = selected_llm(prompt.format(
+                messages = prompt.format_messages(
                     input=self.rqa.question,
                     context=search_text,
                     history=conversation_history
-                ))
+                )
+                response = selected_llm.invoke(messages)
 
                 if hasattr(response, 'content'):
                     return response.content
@@ -1359,10 +1360,11 @@ class HybridResponseStreamer:
                 ])
 
             try:
-                response = selected_llm(prompt.format(
+                messages = prompt.format_messages(
                     question=self.rqa.question,
                     history=conversation_history
-                ))
+                )
+                response = selected_llm.invoke(messages)
 
                 if hasattr(response, 'content'):
                     return response.content
@@ -1397,10 +1399,11 @@ class HybridResponseStreamer:
             ])
 
             try:
-                response = selected_llm(prompt.format(
+                messages = prompt.format_messages(
                     question=self.rqa.question,
                     history=conversation_history
-                ))
+                )
+                response = selected_llm.invoke(messages)
 
                 if hasattr(response, 'content'):
                     return response.content
@@ -1422,12 +1425,13 @@ class HybridResponseStreamer:
             prompt = self.get_hybrid_prompt_template(llm_type)
 
         try:
-            response = selected_llm(prompt.format(
+            messages = prompt.format_messages(
                 input=self.rqa.question,
                 context=context,
                 search_results=formatted_search_results,
                 history=conversation_history
-            ))
+            )
+            response = selected_llm.invoke(messages)
 
             if hasattr(response, 'content'):
                 return response.content
@@ -1873,10 +1877,11 @@ class HybridResponseStreamer:
                     ])
 
                     agent_response = ""
-                    for chunk in selected_llm.stream(prompt.format(
+                    messages = prompt.format_messages(
                             question=self.rqa.question,
                             search_results=formatted_search_results
-                    )):
+                    )
+                    for chunk in selected_llm.stream(messages):
                         content = chunk.content if hasattr(chunk, 'content') else str(chunk)
                         agent_response += content
                         yield json.dumps({"content": content, "type": "chunk"}) + "\n"
@@ -1913,11 +1918,12 @@ class HybridResponseStreamer:
                     }) + "\n"
 
                     # 응답 스트리밍
-                    for chunk in selected_llm.stream(prompt.format(
+                    messages = prompt.format_messages(
                             input=self.rqa.question,
                             context=search_text,
                             history=conversation_history
-                    )):
+                    )
+                    for chunk in selected_llm.stream(messages):
                         content = chunk.content if hasattr(chunk, 'content') else str(chunk)
                         full_response += content
                         yield json.dumps({"content": content, "type": "chunk", "method": "rag"}) + "\n"
@@ -1929,10 +1935,11 @@ class HybridResponseStreamer:
                         ("human", "{question}")
                     ])
 
-                    for chunk in selected_llm.stream(prompt.format(
+                    messages = prompt.format_messages(
                             question=self.rqa.question,
                             history=conversation_history
-                    )):
+                    )
+                    for chunk in selected_llm.stream(messages):
                         content = chunk.content if hasattr(chunk, 'content') else str(chunk)
                         full_response += content
                         yield json.dumps({"content": content, "type": "chunk", "method": "rag"}) + "\n"

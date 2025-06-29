@@ -118,12 +118,18 @@ class QuestionClassifier:
 """
 
             # LLM 호출
-            response_obj = llm(prompt.format(question=question))
+            response_obj = llm.invoke(prompt.format(question=question))
 
-            # LLM 응답 형식에 따른 처리
-            if hasattr(response_obj, 'content'):
-                response = response_obj.content
-            else:
+            # LLM 응답 형식에 따른 처리 - 더 안전한 방식
+            try:
+                if hasattr(response_obj, 'content') and response_obj.content is not None:
+                    response = response_obj.content
+                elif isinstance(response_obj, str):
+                    response = response_obj
+                else:
+                    response = str(response_obj)
+            except Exception as e:
+                self.logger.warning(f"LLM 응답 처리 중 오류: {str(e)}, 문자열로 변환 시도")
                 response = str(response_obj)
 
             # JSON 파싱

@@ -13,28 +13,62 @@ import flask
 from flask import Flask, jsonify, request
 from flask_restx import Api, Resource, fields, reqparse, Namespace
 from flask_cors import CORS
+import sys
+from opensearchpy import OpenSearch, RequestsHttpConnection
+import requests
+import json
+import time
+import urllib3
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.http.models import Distance, VectorParams
 
 if not os.path.exists("log"):
     os.makedirs("log")
+
 logger = logging.getLogger("Rotating Log")
 logger.setLevel(logging.DEBUG)
 
-f_format = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-path = "./log/opds_mgmt_user.log"
-handler = TimedRotatingFileHandler(path,
+f_format = logging.Formatter('[%(asctime)s][%(levelname)s|%(filename)s:%(lineno)s] --- %(message)s')
+
+path = "log/preprocess.log"
+file_handler = TimedRotatingFileHandler(path,encoding='utf-8',
                                    when="h",
                                    interval=1,
                                    backupCount=24)
-handler.namer = lambda name: name + ".txt"
-handler.setFormatter(f_format)
-logger.addHandler(handler)
+file_handler.namer = lambda name: name + ".txt"
+file_handler.setFormatter(f_format)
+
+# Stream Handler 설정
+stream_handler = logging.StreamHandler()
+stream_handler.setFormatter(f_format)
+
+# Handler 추가
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 # Pycharm에서 수행시.
 # module : flask
 # run
 # NUNBUFFERED=1;FLASK_APP=opds_mgmt_user.py;FLASK_ENV=dev
 
-with open('../config/svc-set.yaml') as f:
+ENV = os.getenv('ENVIRONMENT', 'development')
+
+logger.info(f"ENV: {ENV}")
+
+if ENV == 'development':
+    config_file = '../config/svc-set.debug.yaml'
+else:
+    config_file = '../config/svc-set.yaml'
+
+if not os.path.exists(config_file):
+    logger.error(f"설정 파일을 찾을 수 없습니다: {config_file}")
+    sys.exit(1)
+
+logger.info(f"환경: {ENV}, 설정 파일: {config_file}")
+
+with open(config_file) as f:
     config = yaml.load(f, Loader=yaml.FullLoader)
 
 app = flask.Flask(__name__)
@@ -78,13 +112,20 @@ CORS(app)  # 모든 도메인 허용
 
 rest_config = config['mgmt_rest_config']
 vector_postgres = config['database']['vector_db_postgres']
+vector_opensearch = config['database']['vector_db_opensearch']
 opds_system_db = config['database']['opds_system_db']
+vector_qdrant = config['database']['vector_db_qdrant']
 
-mongo_host = config['database']['mongodb']['mongo_host']
-mongo_port = config['database']['mongodb']['mongo_port']
-mongo_user = config['database']['mongodb']['mongo_user']
-mongo_passwd = config['database']['mongodb']['mongo_passwd']
-auth_source = config['database']['mongodb']['auth_source']
+# MongoDB 설정 (선택사항)
+try:
+    mongo_host = config['database']['mongodb']['mongo_host']
+    mongo_port = config['database']['mongodb']['mongo_port']
+    mongo_user = config['database']['mongodb']['mongo_user']
+    mongo_passwd = config['database']['mongodb']['mongo_passwd']
+    auth_source = config['database']['mongodb']['auth_source']
+except KeyError:
+    logger.info("MongoDB 설정이 없습니다. MongoDB 기능은 비활성화됩니다.")
+    mongo_host = None
 
 minio_info = config['minio']
 minio_address = minio_info['address']
@@ -98,6 +139,312 @@ def make_sha_email(email_addr: str):
     print(enc_email)
     enc_email = "e"+enc_email
     return enc_email
+
+def get_qdrant_client():
+    """Qdrant 클라이언트를 생성합니다."""
+    try:
+        # 설정에서 값 가져오기
+        address = vector_qdrant['address']
+        port = vector_qdrant['port']
+        api_key = vector_qdrant['api-key']
+        
+        # 프로토콜 제거하여 순수 호스트명만 추출
+        if address.startswith(('http://', 'https://')):
+            # 프로토콜 제거 (http:// 또는 https://)
+            host = address.split('//')[1].split(':')[0]
+        else:
+            host = address
+        
+        logger.info(f"Qdrant 연결 정보: 호스트={host}, 포트={port}")
+        
+        qdrant_client = QdrantClient(
+            host=host,
+            port=port,
+            api_key=api_key,
+            prefer_grpc=False,
+            https=False,  # SSL 비활성화
+            timeout=30
+        )
+        
+        # 간단한 API 호출로 테스트
+        collections = qdrant_client.get_collections()
+        logger.info(f"✅ Qdrant 연결 성공! 컬렉션 목록: {collections}")
+        return qdrant_client
+
+    except Exception as e:
+        logger.error(f"Qdrant 클라이언트 생성 오류: {str(e)}")
+        return None
+
+def create_qdrant_collection(user_code: str):
+    """사용자별 Qdrant 컬렉션을 생성합니다."""
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            client = get_qdrant_client()
+            if client is None:
+                logger.error(f"Qdrant 클라이언트 생성 실패 (시도 {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return False, "Qdrant 클라이언트 생성 실패"
+            
+            collection_name = user_code.lower()  # 컬렉션명은 소문자로
+            
+            # BGE-M3 모델의 실제 차원
+            embedding_dimension = 1024
+            logger.info(f"사용할 임베딩 차원: {embedding_dimension}")
+            
+            # 컬렉션이 이미 존재하는지 확인
+            try:
+                collection_info = client.get_collection(collection_name)
+                logger.info(f"컬렉션 {collection_name}가 이미 존재합니다.")
+                return True, "컬렉션이 이미 존재함"
+            except Exception:
+                # 컬렉션이 존재하지 않으면 생성
+                pass
+            
+            # 컬렉션 생성
+            client.create_collection(
+                collection_name=collection_name,
+                vectors_config=VectorParams(
+                    size=embedding_dimension,
+                    distance=Distance.COSINE
+                )
+            )
+            
+            logger.info(f"✅ Qdrant 컬렉션 생성 성공: {collection_name}")
+            logger.info(f"   - 벡터 차원: {embedding_dimension}")
+            logger.info(f"   - 거리 측정: COSINE")
+            return True, "컬렉션 생성 성공"
+            
+        except Exception as e:
+            logger.error(f"Qdrant 컬렉션 생성 오류 (시도 {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"{retry_delay}초 후 재시도...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # 지수 백오프
+            else:
+                return False, str(e)
+
+def delete_qdrant_collection(user_code: str):
+    """사용자별 Qdrant 컬렉션을 삭제합니다."""
+    try:
+        client = get_qdrant_client()
+        if client is None:
+            return False, "Qdrant 클라이언트 생성 실패"
+        
+        collection_name = user_code.lower()  # 컬렉션명은 소문자로
+        
+        # 컬렉션이 존재하는지 확인
+        try:
+            client.get_collection(collection_name)
+        except Exception:
+            logger.info(f"컬렉션 {collection_name}가 존재하지 않습니다.")
+            return True, "컬렉션이 존재하지 않음"
+        
+        # 컬렉션 삭제
+        client.delete_collection(collection_name)
+        logger.info(f"✅ Qdrant 컬렉션 삭제 성공: {collection_name}")
+        return True, "컬렉션 삭제 성공"
+        
+    except Exception as e:
+        logger.error(f"Qdrant 컬렉션 삭제 오류: {str(e)}")
+        return False, str(e)
+
+def test_qdrant_connection():
+    """Qdrant 연결을 테스트합니다."""
+    try:
+        logger.info(f"Qdrant 연결 테스트: {vector_qdrant['address']}:{vector_qdrant['port']}")
+        
+        client = get_qdrant_client()
+        if client:
+            collections = client.get_collections()
+            logger.info(f"컬렉션 목록: {collections}")
+            return True, "연결 성공"
+        else:
+            return False, "클라이언트 생성 실패"
+            
+    except Exception as e:
+        logger.error(f"Qdrant 연결 테스트 실패: {str(e)}")
+        return False, str(e)
+
+def get_opensearch_client():
+    """OpenSearch 클라이언트를 생성합니다."""
+    try:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        client = OpenSearch(
+            hosts=[{'host': vector_opensearch['address'], 'port': vector_opensearch['port']}],
+            http_auth=(vector_opensearch['id'], vector_opensearch['pwd']),
+            http_compress=True,
+            use_ssl=True,
+            verify_certs=False,
+            ssl_show_warn=False,
+            timeout=30,
+            retry_on_timeout=True,
+            max_retries=3,
+            connection_class=RequestsHttpConnection
+        )
+        
+        # 연결 테스트
+        info = client.info()
+        logger.info(f"✅ OpenSearch 연결 성공: {info.get('version', {}).get('number', 'unknown')}")
+        return client
+        
+    except Exception as e:
+        logger.error(f"OpenSearch 클라이언트 생성 오류: {str(e)}")
+        return None
+
+def get_bge_m3_dimension():
+    """BGE-M3 모델의 실제 차원을 동적으로 감지합니다."""
+    try:
+        model_name = "BAAI/bge-m3"
+        test_model = SentenceTransformer(model_name)
+        test_embedding = test_model.encode("테스트", convert_to_numpy=True)
+        actual_dimension = len(test_embedding)
+        logger.info(f"BGE-M3 모델 실제 차원: {actual_dimension}")
+        return actual_dimension
+    except Exception as e:
+        logger.warning(f"BGE-M3 차원 감지 실패, 기본값 1024 사용: {str(e)}")
+        return 1024
+
+def create_opensearch_index(user_code: str):
+    """사용자별 OpenSearch 인덱스를 생성합니다."""
+    max_retries = 3
+    retry_delay = 2
+    
+    for attempt in range(max_retries):
+        try:
+            client = get_opensearch_client()
+            if client is None:
+                logger.error(f"OpenSearch 클라이언트 생성 실패 (시도 {attempt + 1}/{max_retries})")
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                return False, "OpenSearch 클라이언트 생성 실패"
+            
+            index_name = user_code.lower()  # 인덱스명은 소문자로
+            
+            # BGE-M3 모델의 실제 차원 감지
+            embedding_dimension = 1024 #get_bge_m3_dimension()
+            logger.info(f"사용할 임베딩 차원: {embedding_dimension}")
+            
+            # 인덱스 매핑 설정 (동적 차원 적용)
+            index_mapping = {
+                "settings": {
+                    "index": {
+                        "knn": True,
+                        "knn.algo_param.ef_search": 512,
+                        "number_of_shards": 1,
+                        "number_of_replicas": 0,
+                        "refresh_interval": "30s"
+                    }
+                },
+                "mappings": {
+                    "properties": {
+                        "source": {
+                            "type": "text"
+                        },
+                        "text": {
+                            "type": "text",
+                            "analyzer": "standard"
+                        },
+                        "vector": {
+                            "type": "knn_vector",
+                            "dimension": embedding_dimension,
+                            "method": {
+                                "name": "hnsw",
+                                "space_type": "cosinesimil",
+                                "engine": "nmslib",
+                                "parameters": {
+                                    "ef_construction": 200,
+                                    "m": 24
+                                }
+                            }
+                        },
+                        "doc_id": {
+                            "type": "integer"
+                        }
+                    }
+                }
+            }
+            
+            # 인덱스가 이미 존재하는지 확인
+            if client.indices.exists(index=index_name):
+                # 기존 인덱스 매핑 확인
+                try:
+                    mapping = client.indices.get_mapping(index=index_name)
+                    existing_dimension = mapping[index_name]['mappings']['properties']['vector']['dimension']
+                    
+                    if existing_dimension != embedding_dimension:
+                        logger.warning(f"기존 인덱스 차원({existing_dimension})과 현재 모델 차원({embedding_dimension})이 다릅니다.")
+                        logger.warning("인덱스를 재생성하려면 수동으로 삭제 후 다시 생성하세요.")
+                    else:
+                        logger.info(f"인덱스 {index_name}가 이미 존재하고 차원이 일치합니다.")
+                except Exception as mapping_error:
+                    logger.warning(f"기존 인덱스 매핑 확인 실패: {str(mapping_error)}")
+                
+                return True, "인덱스가 이미 존재함"
+            
+            # 인덱스 생성
+            response = client.indices.create(index=index_name, body=index_mapping)
+            logger.info(f"✅ OpenSearch 인덱스 생성 성공: {index_name}")
+            logger.info(f"   - 벡터 차원: {embedding_dimension}")
+            logger.info(f"   - 벡터 타입: knn_vector")
+            logger.info(f"   - 알고리즘: HNSW (nmslib)")
+            logger.info(f"   - 응답: {response.get('acknowledged', False)}")
+            return True, "인덱스 생성 성공"
+            
+        except Exception as e:
+            logger.error(f"OpenSearch 인덱스 생성 오류 (시도 {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"{retry_delay}초 후 재시도...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # 지수 백오프
+            else:
+                return False, str(e)
+
+def delete_opensearch_index(user_code: str):
+    """사용자별 OpenSearch 인덱스를 삭제합니다."""
+    try:
+        client = get_opensearch_client()
+        if client is None:
+            return False, "OpenSearch 클라이언트 생성 실패"
+        
+        index_name = user_code.lower()  # 인덱스명은 소문자로
+        
+        # 인덱스가 존재하는지 확인
+        if not client.indices.exists(index=index_name):
+            logger.info(f"인덱스 {index_name}가 존재하지 않습니다.")
+            return True, "인덱스가 존재하지 않음"
+        
+        # 인덱스 삭제
+        response = client.indices.delete(index=index_name)
+        logger.info(f"OpenSearch 인덱스 삭제 성공: {index_name}")
+        return True, "인덱스 삭제 성공"
+        
+    except Exception as e:
+        logger.error(f"OpenSearch 인덱스 삭제 오류: {str(e)}")
+        return False, str(e)
+
+def test_opensearch_connection():
+    """OpenSearch 연결을 테스트합니다."""
+    try:
+        logger.info(f"OpenSearch 연결 테스트: {vector_opensearch['address']}:{vector_opensearch['port']}")
+        
+        client = get_opensearch_client()
+        if client:
+            health = client.cluster.health()
+            logger.info(f"클러스터 상태: {health.get('status', 'unknown')}")
+            return True, "연결 성공"
+        else:
+            return False, "클라이언트 생성 실패"
+            
+    except Exception as e:
+        logger.error(f"OpenSearch 연결 테스트 실패: {str(e)}")
+        return False, str(e)
 
 def get_usercode_by_username(input_user: str):
     opds_sysdb_conn = pymysql.connect(
@@ -270,11 +617,13 @@ class DeleteUser(Resource):
 
     def delete_user(self, email):
         """
-        user remove from mariadb, minio, pgvector
+        user remove from mariadb, minio, pgvector, opensearch
         :param email:
 
         :return:
         """
+        mail_sha_code = make_sha_email(email)
+        
         try:
             mariadb_conn = pymysql.connect(
                 user=opds_system_db["id"],
@@ -297,7 +646,6 @@ class DeleteUser(Resource):
             minio_client = Minio(minio_address,
                                  access_key=accesskey,
                                  secret_key=secretkey, secure=False)
-            mail_sha_code = make_sha_email(email)
             minio_client.remove_bucket(mail_sha_code)
         except Exception as e:
             print('Minio critical error')
@@ -321,6 +669,27 @@ class DeleteUser(Resource):
             print('PGVector Connection critical error')
             print(str(e))
             return -1, str(e)
+        
+        # OpenSearch 인덱스 삭제 (선택사항)
+        try:
+            success, msg = delete_opensearch_index(mail_sha_code)
+            if success:
+                logger.info(f"OpenSearch 인덱스 삭제 성공: {mail_sha_code}")
+            else:
+                logger.warning(f"OpenSearch 인덱스 삭제 실패하지만 계속 진행: {msg}")
+        except Exception as e:
+            logger.warning(f"OpenSearch 오류 발생하지만 계속 진행: {str(e)}")
+        
+        # Qdrant 컬렉션 삭제 (선택사항)
+        try:
+            success, msg = delete_qdrant_collection(mail_sha_code)
+            if success:
+                logger.info(f"Qdrant 컬렉션 삭제 성공: {mail_sha_code}")
+            else:
+                logger.warning(f"Qdrant 컬렉션 삭제 실패하지만 계속 진행: {msg}")
+        except Exception as e:
+            logger.warning(f"Qdrant 오류 발생하지만 계속 진행: {str(e)}")
+            
         return 0, None
 
 @UpdatePWD_NS.route('/update_password')
@@ -518,7 +887,8 @@ class RegisterUser(Resource):
                 print('Mgmt DB Connection critical error')
                 print(str(e))
                 return -2, str(e)
-            # VectorDB
+            
+            # VectorDB (PostgreSQL)
             try:
                 vector_db = psycopg2.connect(host=vector_postgres['address'],
                                              dbname=vector_postgres['database'],
@@ -544,6 +914,27 @@ class RegisterUser(Resource):
                 print('PGVector critical error')
                 print(str(e))
                 return -2, str(e)
+            
+            # OpenSearch 인덱스 생성 (선택사항)
+            try:
+                success, msg = create_opensearch_index(mail_sha_code)
+                if success:
+                    logger.info(f"OpenSearch 인덱스 생성 성공: {mail_sha_code}")
+                else:
+                    logger.warning(f"OpenSearch 인덱스 생성 실패하지만 계속 진행: {msg}")
+            except Exception as e:
+                logger.warning(f"OpenSearch 오류 발생하지만 계속 진행: {str(e)}")
+            
+            # Qdrant 컬렉션 생성 (선택사항)
+            try:
+                success, msg = create_qdrant_collection(mail_sha_code)
+                if success:
+                    logger.info(f"Qdrant 컬렉션 생성 성공: {mail_sha_code}")
+                else:
+                    logger.warning(f"Qdrant 컬렉션 생성 실패하지만 계속 진행: {msg}")
+            except Exception as e:
+                logger.warning(f"Qdrant 오류 발생하지만 계속 진행: {str(e)}")
+                
             return 0, "ok" #정상 추가됨.
         elif auth_status == -1: #암호 오류 (사용자가 존재하는데 다시 모르고 가입하려는 경우)
             return -1, "Auth Fail"

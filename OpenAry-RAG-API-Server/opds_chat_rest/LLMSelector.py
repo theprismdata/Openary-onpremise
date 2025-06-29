@@ -127,7 +127,7 @@ class LLMSelector:
                         model=self.config['langmodel']['API']['Claude']['chat_model'],
                         anthropic_api_key=self.config['langmodel']['API']['Claude']['apikey'],
                         temperature=0.7,
-                        streaming=True  # 스트리밍 활성화
+                        streaming=False  # 스트리밍 비활성화 (invoke 호출 문제 해결)
                     )
 
                 # Gemma 초기화 (주석 처리)
@@ -235,7 +235,7 @@ class LLMSelector:
                     self.logger.warning("사용 가능한 분류용 LLM이 없습니다. GENERAL로 분류합니다.")
                     return QuestionIntent.GENERAL
                     
-                response = classifier_llm(classification_prompt.format(question=question))
+                response = classifier_llm.invoke(classification_prompt.format(question=question))
 
                 # 응답에서 카테고리 추출
                 response = response.strip().upper()
