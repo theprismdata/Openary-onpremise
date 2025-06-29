@@ -1,0 +1,98 @@
+langmodel:
+  RUN_MODE: API
+  API:
+    OpenAI:
+      apikey: ""
+      chat_model: "gpt-4o"
+
+    Claude:
+      apikey: ""
+      chat_model: "claude-3-7-sonnet-20250219"
+
+    huggingface:
+      model: "google/gemma-2-9b-it"
+      api_key: ""
+      max_token: 500
+      temperature: 0.7
+    
+embeddingmodel:
+  sentensetransformer:
+    embedding_model: "BAAI/bge-m3"
+
+agent:
+  serperkey: ""
+  Tavily: ""
+
+upstage:
+  apikey: ""
+
+minio:
+  address: ""
+  accesskey: opds
+  secretkey: opds_pass
+
+redis:
+  address: "redis://redis:6379"
+
+database:
+  vector_db_postgres:
+    address: ""
+    port: 
+    id: ""
+    pwd: ""
+    database: ""
+
+  vector_db_opensearch:
+    address: ""
+    port: 
+    id: ""
+    pwd: ""
+    
+  vector_db_qdrant:
+    address: ""
+    port: 
+    api-key: ""
+    
+  opds_system_db:
+    address: ""
+    port: 
+    id: ""
+    pwd: ""
+    database: ""
+
+  mongodb:
+    mongo_host: ""
+    mongo_port: 
+    mongo_user: ""
+    mongo_passwd: ""
+    auth_source: "genai_svc_dev"
+    chat_history: "llm_chat_history"
+
+SECRET_KEY: ""
+REFRESH_TOKEN_SECRET_KEY: ""
+
+mgmt_rest_config:
+  port: 9001
+
+api_rest_config:
+  port: 9000
+
+external_svc:
+  management_service: "http://localhost:9001/mgmt" #internal
+
+mqtt:
+  address: ""
+  port: 
+  id: opds
+  pwd: opds_pass
+  virtualhost: "/"
+
+RABBITMQ_SVC_QUEUE:
+  PREPROCES_Q_NAME: "OPDS_PREP_REQ"
+  PREPROCES_ROUTEKEY: "OPDS_PREP_REQ"
+
+  SUMMARY_Q_NAME: "OPDS_SUMMARY_REQ"
+  SUMMARY_ROUTE_KEY: "OPDS_SUMMARY_REQ"
+
+  EMBEDDING_Q_NAME: "OPDS_EMBEDDING_REQ"
+  EMBEDDING_ROUTE_KEY: "OPDS_EMBEDDING_REQ"
