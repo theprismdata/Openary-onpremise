@@ -49,6 +49,13 @@ from mecab import MeCab
 from LLMIntentAnalyzer import LLMIntentAnalyzer
 from question_classifier import QuestionClassifier
 from LLMSelector import LLMSelector
+import urllib3
+from opensearchpy import OpenSearch, RequestsHttpConnection
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.http import models
+from qdrant_client.http.models import Distance, VectorParams
+
 
 print("build:2025-02-03-11:36")
 if not os.path.exists("log"):
@@ -99,6 +106,9 @@ minio_address = minio_info['address']
 accesskey = minio_info['accesskey']
 secretkey = minio_info['secretkey']
 vector_postgres = config['database']['vector_db_postgres']
+vector_opensearch = config['database']['vector_db_opensearch']
+vector_qdrant = config['database']['vector_db_qdrant']
+
 opds_system_db_info = config['database']['opds_system_db']
 
 mongo_host = config['database']['mongodb']['mongo_host']
@@ -266,6 +276,67 @@ pgvector_manager = DatabaseConnectionManager(logger,
     pool_timeout=30
 )
 
+def get_opensearch_client():
+    """OpenSearch 클라이언트를 생성합니다."""
+    try:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        
+        client = OpenSearch(
+            hosts=[{'host': vector_opensearch['address'], 'port': vector_opensearch['port']}],
+            http_auth=(vector_opensearch['id'], vector_opensearch['pwd']),
+            http_compress=True,
+            use_ssl=True,
+            verify_certs=False,
+            ssl_show_warn=False,
+            timeout=30,
+            retry_on_timeout=True,
+            max_retries=3,
+            connection_class=RequestsHttpConnection
+        )
+        
+        # 연결 테스트
+        info = client.info()
+        logger.info(f"OpenSearch 연결 성공: {info.get('version', {}).get('number', 'unknown')}")
+        return client
+        
+    except Exception as e:
+        logger.error(f"OpenSearch 클라이언트 생성 오류: {str(e)}")
+        return None
+
+def get_qdrant_client():
+    """Qdrant 클라이언트를 생성합니다."""
+    try:
+        # 설정에서 값 가져오기
+        address = vector_qdrant['address']
+        port = vector_qdrant['port']
+        api_key = vector_qdrant['api-key']
+        
+        # 프로토콜 제거하여 순수 호스트명만 추출
+        if address.startswith(('http://', 'https://')):
+            # 프로토콜 제거 (http:// 또는 https://)
+            host = address.split('//')[1].split(':')[0]
+        else:
+            host = address
+        
+        logger.info(f"Qdrant 연결 정보: 호스트={host}, 포트={port}")
+        
+        qdrant_client = QdrantClient(
+            host=host,
+            port=port,
+            api_key=api_key,
+            prefer_grpc=False,
+            https=False,  # SSL 비활성화
+            timeout=30
+        )
+        
+        # 간단한 API 호출로 테스트
+        collections = qdrant_client.get_collections()
+        logger.info(f"Qdrant 연결 성공! 컬렉션 목록: {collections}")
+        return qdrant_client
+
+    except Exception as e:
+        logger.error(f"Qdrant 클라이언트 생성 오류: {str(e)}")
+        return None
 
 def get_usercode_from_email(user_email):
     try:
@@ -301,19 +372,6 @@ def get_llm_message_cache(messages, model="gpt-4o", temperature=0, max_tokens=10
         logger.debug("Total Tokens:", callback.total_tokens)
         return response.choices[0].message.content
 
-def get_relevant_vector_doc_top3(pgvector_conn, user_code, embedding_vector):
-    cur = pgvector_conn.cursor()
-    cur.execute(
-        f"""SELECT source, text, 1 - (vector <=> %s) AS cosine_similarity 
-               FROM {user_code} 
-               ORDER BY cosine_similarity DESC LIMIT 3""",
-        (embedding_vector,))
-    top3_docs = cur.fetchall()
-    top_related_doc = []
-    for top_doc in top3_docs:
-        if top_doc[2] > 0.4:
-            top_related_doc.append((top_doc[0], top_doc[1]))
-    return top_related_doc
 
 def get_openapi_schema():
     if app.openapi_schema:
@@ -1040,80 +1098,278 @@ class HybridResponseStreamer:
                 ("human", "외부 검색 결과: {search_results}")
             ])
 
-    def perform_vector_search(self):
-        """벡터 검색 수행 (RAG)"""
-        logger.debug("내부 벡터 검색(RAG) 시작")
+    def search_pgvector(self, query_vector, limit=5):
+        """PGVector 검색"""
+        try:
+            with pgvector_manager.get_session() as db_pg:
+                register_vector(db_pg.bind.raw_connection())
+                
+                result = db_pg.execute(
+                    text(f"""SELECT source, text, 1 - (vector <=> :vector) AS cosine_similarity 
+                           FROM {self.user_code} 
+                           ORDER BY cosine_similarity DESC LIMIT :limit"""),
+                    {"vector": query_vector, "limit": limit}
+                )
+                
+                results = []
+                for doc in result.fetchall():
+                    if doc[2] > 0.45:  # 유사도 임계값
+                        results.append({
+                            "source": doc[0],
+                            "text": doc[1],
+                            "similarity": doc[2],
+                            "db_type": "pgvector"
+                        })
+                
+                logger.debug(f"PGVector 검색 결과: {len(results)}개")
+                return results
+                
+        except Exception as e:
+            logger.error(f"PGVector 검색 오류: {str(e)}")
+            return []
 
-        with pgvector_manager.get_session() as db_pg:
-            register_vector(db_pg.bind.raw_connection())
-
-            # 미등록 단어 식별
-            unknown_words = get_unknown_words_from_text(self.rqa.question, mecab_tagger)
-            logger.debug(f"미등록 단어: {unknown_words}")
-
-            # 기본 형태소 분석 및 임베딩
-            processed_query = analyze_korean_text(self.rqa.question)
-            logger.debug(f"원본 질문: {self.rqa.question}")
-            logger.debug(f"형태소 분석 결과: {processed_query}")
-
-            # 기본 임베딩 생성
-            base_embedding = embedding_model.embed_query(processed_query)
-            base_vector = np.array(base_embedding)
-
-            # 명사 추출 및 임베딩
-            key_nouns = analyze_korean_text(self.rqa.question, pos_filter=['NNG', 'NNP'])
-            if key_nouns:
-                logger.debug(f"핵심 명사: {key_nouns}")
-                noun_embedding = embedding_model.embed_query(key_nouns)
-                noun_vector = np.array(noun_embedding)
-            else:
-                noun_vector = base_vector
-
-            # 미등록 단어 임베딩
-            if unknown_words:
-                unknown_text = " ".join(unknown_words)
-                logger.debug(f"미등록 단어 텍스트: {unknown_text}")
-                unknown_embedding = embedding_model.embed_query(unknown_text)
-                unknown_vector = np.array(unknown_embedding)
-            else:
-                unknown_vector = base_vector
-
-            # 가중치 결합 벡터 생성
-            combined_vector = 0.5 * base_vector + 0.3 * noun_vector + 0.2 * unknown_vector
-            combined_vector = combined_vector / np.linalg.norm(combined_vector)
-
-            # 디버깅을 위한 로깅
-            logger.debug(f"벡터 결합 완료: 기본(0.5) + 명사(0.3) + 미등록 단어(0.2)")
-
-            # 벡터 검색 실행
-            result = db_pg.execute(
-                text(f"""SELECT source, text, 1 - (vector <=> :vector) AS cosine_similarity 
-                       FROM {self.user_code} 
-                       ORDER BY cosine_similarity DESC LIMIT 5"""),
-                {"vector": combined_vector}
+    def search_opensearch(self, query_text, limit=5):
+        """OpenSearch 검색"""
+        try:
+            opensearch_client = get_opensearch_client()
+            if not opensearch_client:
+                logger.warning("OpenSearch 클라이언트를 사용할 수 없습니다.")
+                return []
+            
+            # 임베딩 벡터 생성
+            query_vector = embedding_model.embed_query(query_text)
+            
+            # 인덱스명 생성 (사용자 코드 기반)
+            index_name = f"user_code_{self.user_code.lower()}"
+            
+            # script_score를 사용한 벡터 검색 (더 호환성 있는 방법)
+            search_body = {
+                    "size": limit,
+                    "query": {
+                        "knn": {
+                            "vector": {
+                                "vector": query_vector,
+                                "k": 50
+                            }
+                        }
+                    }
+                }
+            
+            response = opensearch_client.search(
+                index=index_name,
+                body=search_body
             )
+            logger.debug(f"OpenSearch index {index_name} 검색 결과: {len(response['hits']['hits'])}")
 
-            # 검색 결과 처리
-            top_docs = result.fetchall()
-            self.rag_sources = []
-            self.related_docs = []
+            results = []
+            for hit in response['hits']['hits']:
+                # script_score 결과는 1.0을 더한 값이므로 1.0을 빼서 정규화
+                raw_score = hit['_score']
+                
+                if raw_score >= 0.5:  # 임계값
+                    results.append({
+                        "source": hit['_source'].get('source', ''),
+                        "text": hit['_source'].get('text', ''),
+                        "similarity": raw_score,
+                        "db_type": "opensearch",
+                        "doc_id": hit['_source'].get('doc_id', ''),
+                        "raw_score": raw_score
+                    })
+            
+            # 유사도 기준으로 정렬
+            results.sort(key=lambda x: x['similarity'], reverse=True)
+            
+            logger.debug(f"OpenSearch 검색 결과: {len(results)}개")
+            return results[:limit]  # 최종 결과 수 제한
+            
+        except Exception as e:
+            logger.error(f"OpenSearch 검색 오류: {str(e)}")
+            return []
 
-            for doc in top_docs:
-                sim_rate = doc[2]
-                if sim_rate > 0.45:  # 유사도 임계값
-                    if doc[0] not in self.rag_sources:
-                        self.rag_sources.append(doc[0])
-                        self.related_docs.append(doc[1])
-                        logger.debug(f"관련 문서: {doc[0]}, 유사도: {sim_rate:.4f}")
+    def search_qdrant(self, query_vector, limit=5):
+        """Qdrant 검색"""
+        try:
+            qdrant_client = get_qdrant_client()
+            if not qdrant_client:
+                logger.warning("Qdrant 클라이언트를 사용할 수 없습니다.")
+                return []
+            
+            # 컬렉션명 생성 (사용자 코드 기반)
+            collection_name = f"{self.user_code.lower()}"
+            
+            # 검색 실행
+            search_result = qdrant_client.search(
+                collection_name=collection_name,
+                query_vector=query_vector,
+                limit=limit,
+                score_threshold=0.45
+            )
+            
+            results = []
+            for point in search_result:
+                results.append({
+                    "source": point.payload.get('source', ''),
+                    "text": point.payload.get('text', ''),
+                    "similarity": point.score,
+                    "db_type": "qdrant"
+                })
+            
+            logger.debug(f"Qdrant 검색 결과: {len(results)}개")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Qdrant 검색 오류: {str(e)}")
+            return []
 
-            # RAG 신뢰도 계산 (관련 문서 수와 유사도를 기반으로)
-            if len(self.related_docs) > 0:
-                avg_sim_rate = sum(doc[2] for doc in top_docs[:len(self.related_docs)]) / len(self.related_docs)
-                self.rag_confidence = min(0.95, avg_sim_rate * 0.8 + 0.3)  # 유사도 기반 신뢰도 계산
-            else:
-                self.rag_confidence = 0.1  # 관련 문서가 없으면 낮은 신뢰도
+    def ensemble_search_results(self, pgvector_results, opensearch_results, qdrant_results):
+        """검색 결과 앙상블"""
+        # 모든 결과를 하나의 딕셔너리로 통합 (source를 키로 사용)
+        combined_results = {}
+        
+        # 각 데이터베이스 결과를 처리
+        all_results = [
+            (pgvector_results, "pgvector", 1.0),      # PGVector 가중치
+            (opensearch_results, "opensearch", 0.8),  # OpenSearch 가중치  
+            (qdrant_results, "qdrant", 0.9)           # Qdrant 가중치
+        ]
+        
+        for results, db_type, weight in all_results:
+            for result in results:
+                source = result["source"]
+                similarity = result["similarity"] * weight
+                
+                if source in combined_results:
+                    # 이미 존재하는 소스면 점수 결합
+                    existing = combined_results[source]
+                    existing["similarity_scores"].append(similarity)
+                    existing["db_sources"].append(db_type)
+                    existing["combined_similarity"] = max(existing["combined_similarity"], similarity)
+                else:
+                    # 새로운 소스 추가
+                    combined_results[source] = {
+                        "source": source,
+                        "text": result["text"],
+                        "similarity_scores": [similarity],
+                        "db_sources": [db_type],
+                        "combined_similarity": similarity,
+                        "db_count": 1
+                    }
+        
+        # 앙상블 점수 계산 및 정렬
+        final_results = []
+        for source, data in combined_results.items():
+            # 여러 DB에서 발견된 경우 보너스 점수 부여
+            db_count_bonus = len(data["db_sources"]) * 0.1
+            
+            # 최종 점수 = 최고 유사도 + 평균 유사도 * 0.3 + DB 개수 보너스
+            avg_similarity = sum(data["similarity_scores"]) / len(data["similarity_scores"])
+            final_score = data["combined_similarity"] + avg_similarity * 0.3 + db_count_bonus
+            
+            final_results.append({
+                "source": source,
+                "text": data["text"],
+                "similarity": final_score,
+                "db_sources": data["db_sources"],
+                "db_count": len(data["db_sources"])
+            })
+        
+        # 최종 점수로 정렬
+        final_results.sort(key=lambda x: x["similarity"], reverse=True)
+        
+        # 상위 결과만 반환 (최대 5개)
+        top_results = final_results[:5]
+        
+        logger.debug(f"앙상블 결과: {len(top_results)}개 (총 {len(final_results)}개 중)")
+        for result in top_results:
+            logger.debug(f"  - {result['source']}: {result['similarity']:.4f} (DB: {result['db_sources']})")
+        
+        return top_results
 
-        logger.debug(f"RAG 검색 완료: 소스 {len(self.rag_sources)}개, 신뢰도 {self.rag_confidence:.2f}")
+    def perform_vector_search(self):
+        """벡터 검색 수행 (순차 앙상블 방식)"""
+        logger.debug("순차 앙상블 벡터 검색 시작")
+        
+        # 미등록 단어 식별
+        unknown_words = get_unknown_words_from_text(self.rqa.question, mecab_tagger)
+        logger.debug(f"미등록 단어: {unknown_words}")
+
+        # 기본 형태소 분석 및 임베딩
+        processed_query = analyze_korean_text(self.rqa.question)
+        logger.debug(f"원본 질문: {self.rqa.question}")
+        logger.debug(f"형태소 분석 결과: {processed_query}")
+
+        # 기본 임베딩 생성
+        base_embedding = embedding_model.embed_query(processed_query)
+        base_vector = np.array(base_embedding)
+
+        # 명사 추출 및 임베딩
+        key_nouns = analyze_korean_text(self.rqa.question, pos_filter=['NNG', 'NNP'])
+        if key_nouns:
+            logger.debug(f"핵심 명사: {key_nouns}")
+            noun_embedding = embedding_model.embed_query(key_nouns)
+            noun_vector = np.array(noun_embedding)
+        else:
+            noun_vector = base_vector
+
+        # 미등록 단어 임베딩
+        if unknown_words:
+            unknown_text = " ".join(unknown_words)
+            logger.debug(f"미등록 단어 텍스트: {unknown_text}")
+            unknown_embedding = embedding_model.embed_query(unknown_text)
+            unknown_vector = np.array(unknown_embedding)
+        else:
+            unknown_vector = base_vector
+
+        # 가중치 결합 벡터 생성
+        combined_vector = 0.5 * base_vector + 0.3 * noun_vector + 0.2 * unknown_vector
+        combined_vector = combined_vector / np.linalg.norm(combined_vector)
+
+        logger.debug(f"벡터 결합 완료: 기본(0.5) + 명사(0.3) + 미등록 단어(0.2)")
+
+        # 순차적으로 각 벡터 DB에서 검색 수행
+        logger.debug("1. PGVector 검색 시작")
+        pgvector_results = self.search_pgvector(combined_vector)
+        logger.debug(f"PGVector 검색 결과: {len(pgvector_results)}개")
+
+        logger.debug("2. OpenSearch 검색 시작")
+        opensearch_results = self.search_opensearch(processed_query)
+        logger.debug(f"OpenSearch 검색 결과: {len(opensearch_results)}개")
+
+        logger.debug("3. Qdrant 검색 시작")
+        qdrant_results = self.search_qdrant(combined_vector.tolist())
+        logger.debug(f"Qdrant 검색 결과: {len(qdrant_results)}개")
+
+        # 검색 결과 앙상블
+        logger.debug("4. 검색 결과 앙상블 시작")
+        ensemble_results = self.ensemble_search_results(
+            pgvector_results, opensearch_results, qdrant_results
+        )
+
+        # 결과 처리
+        self.rag_sources = []
+        self.related_docs = []
+
+        for result in ensemble_results:
+            if result["similarity"] > 0.45:  # 최종 유사도 임계값
+                if result["source"] not in self.rag_sources:
+                    self.rag_sources.append(result["source"])
+                    self.related_docs.append(result["text"])
+                    logger.debug(f"선택된 문서: {result['source']}, 점수: {result['similarity']:.4f}, DB: {result['db_sources']}")
+
+        # RAG 신뢰도 계산
+        if len(self.related_docs) > 0:
+            # 앙상블 결과의 평균 점수 기반 신뢰도
+            avg_score = sum(r["similarity"] for r in ensemble_results[:len(self.related_docs)]) / len(self.related_docs)
+            
+            # 여러 DB에서 발견된 문서가 많을수록 신뢰도 증가
+            multi_db_count = sum(1 for r in ensemble_results[:len(self.related_docs)] if r["db_count"] > 1)
+            multi_db_bonus = multi_db_count * 0.1
+            
+            self.rag_confidence = min(0.95, avg_score * 0.6 + 0.2 + multi_db_bonus)
+        else:
+            self.rag_confidence = 0.1
+
+        logger.debug(f"순차 앙상블 검색 완료: 소스 {len(self.rag_sources)}개, 신뢰도 {self.rag_confidence:.2f}")
 
     def perform_external_search(self):
         """외부 검색 수행 (Agent)"""

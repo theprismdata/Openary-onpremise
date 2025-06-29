@@ -353,7 +353,7 @@ def batch_insert_vectors_opensearch(user_code, vectors_data):
     
     try:
         # 인덱스 이름은 user_code를 기반으로 생성
-        index_name = f"vectors_{user_code.lower()}"
+        index_name = f"user_code_{user_code.lower()}"
         
         # 인덱스가 존재하지 않으면 생성
         if not opensearch_client.indices.exists(index=index_name):
@@ -419,6 +419,8 @@ def batch_insert_vectors_opensearch(user_code, vectors_data):
         if actions:
             from opensearchpy.helpers import bulk
             bulk(opensearch_client, actions)
+            # 즉시 검색 가능하도록 인덱스 refresh
+            opensearch_client.indices.refresh(index=index_name)
             logger.debug(f"OpenSearch에 {len(actions)}개 벡터 삽입 완료")
             
     except Exception as e:
@@ -526,7 +528,7 @@ def delete_vectors_opensearch(user_code, doc_id):
         return
     
     try:
-        index_name = f"vectors_{user_code.lower()}"
+        index_name = f"user_code_{user_code.lower()}"
         
         # 인덱스가 존재하는지 확인
         if not opensearch_client.indices.exists(index=index_name):
@@ -666,10 +668,63 @@ def wait_mq_signal(ch, method, properties, body):
                     'opensearch_embedding': str(opensearch_embedding)
                 })
 
-                # 배치 크기에 도달하거나 마지막 항목이면 삽입
-                if len(vectors_batch) >= batch_size or ci == len_chunk:
-                    batch_insert_vectors_unified(user_code, vectors_batch)
-                    vectors_batch = []
+                batch_insert_vectors_unified(user_code, vectors_batch)
+                vectors_batch = []
+
+                """
+                일시적 실시간 조회
+                """
+                # OpenSearch 저장 확인 및 실시간 모니터링
+                try:
+                    opensearch_client = get_opensearch_client()
+                    if opensearch_client:
+                        index_name = f"user_code_{user_code.lower()}"
+                        
+                        # 1. 문서 개수 확인
+                        count_response = opensearch_client.count(
+                            index=index_name,
+                            body={"query": {"term": {"doc_id": doc_id}}}
+                        )
+                        stored_count = count_response['count']
+                        
+                        # 2. 인덱스 상태 확인
+                        index_stats = opensearch_client.indices.stats(index=index_name)
+                        total_docs = index_stats['indices'][index_name]['total']['docs']['count']
+                        index_size = index_stats['indices'][index_name]['total']['store']['size_in_bytes']
+                        
+                        # 3. 최근 저장된 문서 샘플 조회 (벡터 제외)
+                        recent_docs = opensearch_client.search(
+                            index=index_name,
+                            body={
+                                "query": {"term": {"doc_id": doc_id}},
+                                "_source": {"excludes": ["vector"]},
+                                "size": 3,
+                                "sort": [{"_id": {"order": "desc"}}]
+                            }
+                        )
+                        
+                        # 4. 상세 로그 출력
+                        logger.info(f"=== OpenSearch 저장 완료 ===")
+                        logger.info(f"- 인덱스: {index_name}")
+                        logger.info(f"- doc_id {doc_id}: {stored_count}개 청크 저장")
+                        logger.info(f"- 인덱스 전체 문서 수: {total_docs}")
+                        logger.info(f"- 인덱스 크기: {index_size / (1024*1024):.2f} MB")
+                        
+                        if recent_docs['hits']['hits']:
+                            logger.info(f"- 최근 저장된 청크 예시:")
+                            for i, hit in enumerate(recent_docs['hits']['hits'][:2], 1):
+                                source = hit['_source']
+                                text_preview = source['text'][:100] + "..." if len(source['text']) > 100 else source['text']
+                                logger.info(f"  {i}. ID: {hit['_id']}")
+                                logger.info(f"     텍스트: {text_preview}")
+                        
+                        logger.info(f"=== OpenSearch Dashboard에서 확인 가능 ===")
+                        logger.info(f"- 인덱스 패턴: user_code_{user_code.lower()}")
+                        logger.info(f"- 검색 쿼리: GET {index_name}/_search")
+                        
+                except Exception as e:
+                    logger.warning(f"OpenSearch 저장 확인 실패: {str(e)}")
+
 
                 # 진행률 업데이트 (10% 단위로만)
                 progress = int((ci / len_chunk) * 100)
@@ -686,6 +741,7 @@ def wait_mq_signal(ch, method, properties, body):
                 {"$set": {"cleansing": "finish", "embedding": "finish"}}
             )
 
+        
         logger.debug(f"doc id {doc_id} embedding finish")
         ch.basic_ack(delivery_tag=method.delivery_tag)
 
