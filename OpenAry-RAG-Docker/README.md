@@ -11,12 +11,33 @@
 #### 필수 설정 단계
 
 1. **샘플 설정 파일 복사:**
+   
+   **Windows (PowerShell):**
    ```powershell
    Copy-Item config\svc-set.yaml config\svc-set.local.yaml
    ```
+   
+   **macOS/Linux (Terminal):**
+   ```bash
+   cp config/svc-set.yaml config/svc-set.local.yaml
+   ```
 
 2. **API 키 업데이트:**
-   `config\svc-set.local.yaml` 파일을 텍스트 에디터로 열어서 플레이스홀더 값을 실제 API 키로 교체하세요:
+   설정 파일을 텍스트 에디터로 열어서 플레이스홀더 값을 실제 API 키로 교체하세요:
+   
+   **Windows:**
+   ```powershell
+   notepad config\svc-set.local.yaml
+   ```
+   
+   **macOS:**
+   ```bash
+   open -e config/svc-set.local.yaml
+   # 또는 VS Code가 설치되어 있다면:
+   code config/svc-set.local.yaml
+   ```
+   
+   교체할 API 키들:
    - `your-openai-api-key-here` - OpenAI API 키
    - `your-claude-api-key-here` - Anthropic Claude API 키
    - `your-huggingface-api-key-here` - Hugging Face API 키
@@ -25,13 +46,23 @@
    - `your-upstage-api-key-here` - Upstage API 키
 
 3. **시크릿 키 생성:**
-   PowerShell에서 랜덤 시크릿 키를 생성하세요:
+   
+   **Windows (PowerShell):**
    ```powershell
    # SECRET_KEY 생성
    [System.Web.Security.Membership]::GeneratePassword(64, 0)
    
    # 또는 Python이 설치되어 있다면:
    python -c "import secrets; print(secrets.token_hex(32))"
+   ```
+   
+   **macOS/Linux (Terminal):**
+   ```bash
+   # Python 사용
+   python3 -c "import secrets; print(secrets.token_hex(32))"
+   
+   # 또는 OpenSSL 사용
+   openssl rand -hex 32
    
    # 또는 온라인 생성기 사용:
    # https://www.allkeysgenerator.com/Random/Security-Encryption-Key-Generator.aspx
@@ -72,10 +103,9 @@
 - API 키와 시크릿 키를 정기적으로 교체하세요
 - 프로덕션 환경에서는 민감한 정보에 대해 Docker secrets 사용을 고려하세요
 
-#### 환경 변수 오버라이드 (PowerShell)
+#### 환경 변수 오버라이드
 
-PowerShell에서 환경 변수를 사용하여 설정 값을 오버라이드할 수 있습니다:
-
+**Windows (PowerShell):**
 ```powershell
 # 현재 세션에서만 설정
 $env:OPDS_LANGMODEL_API_OPENAI_APIKEY = "실제-openai-키"
@@ -86,7 +116,24 @@ $env:OPDS_SECRET_KEY = "실제-시크릿-키"
 [Environment]::SetEnvironmentVariable("OPDS_SECRET_KEY", "실제-시크릿-키", "User")
 ```
 
+**macOS/Linux (Terminal):**
+```bash
+# 현재 세션에서만 설정
+export OPDS_LANGMODEL_API_OPENAI_APIKEY="실제-openai-키"
+export OPDS_SECRET_KEY="실제-시크릿-키"
+
+# 영구적으로 설정 (bash)
+echo 'export OPDS_LANGMODEL_API_OPENAI_APIKEY="실제-openai-키"' >> ~/.bashrc
+echo 'export OPDS_SECRET_KEY="실제-시크릿-키"' >> ~/.bashrc
+
+# 영구적으로 설정 (zsh - macOS 기본)
+echo 'export OPDS_LANGMODEL_API_OPENAI_APIKEY="실제-openai-키"' >> ~/.zshrc
+echo 'export OPDS_SECRET_KEY="실제-시크릿-키"' >> ~/.zshrc
+```
+
 #### 시작하기
+
+### Windows 사용자
 
 1. **Docker Desktop 설치 확인:**
    ```powershell
@@ -122,24 +169,62 @@ $env:OPDS_SECRET_KEY = "실제-시크릿-키"
    docker-compose -f openary-local-compose.yaml up -d
    ```
 
-6. **서비스 상태 확인:**
-   ```powershell
-   docker-compose -f openary-local-compose.yaml ps
+### macOS 사용자
+
+1. **Docker Desktop 설치 확인:**
+   ```bash
+   docker --version
+   docker-compose --version
    ```
 
-7. **로그 확인:**
-   ```powershell
-   # 모든 서비스 로그
-   docker-compose -f openary-local-compose.yaml logs -f
-   
-   # 특정 서비스 로그
-   docker-compose -f openary-local-compose.yaml logs -f opds-chatapi
+2. **설정 파일 복사 및 수정:**
+   ```bash
+   cp config/svc-set.yaml config/svc-set.local.yaml
+   open -e config/svc-set.local.yaml
    ```
 
-8. **서비스 중지:**
-   ```powershell
-   docker-compose -f openary-local-compose.yaml down
+3. **필요한 디렉토리 생성:**
+   ```bash
+   mkdir -p ~/docker-volumes/openary/{ollama_data,rabbitmq_data,minio_data,mariadb_data,pgdata,mongodb_data,qdrant_data,opensearch_data}
    ```
+
+4. **Docker Compose 파일 수정 (macOS용 경로):**
+   `openary-local-compose.yaml` 파일에서 볼륨 경로를 다음과 같이 수정:
+   ```yaml
+   # Windows 경로: C:/temp/ollama_data:/root/.ollama
+   # macOS 경로로 변경:
+   volumes:
+     - ~/docker-volumes/openary/ollama_data:/root/.ollama
+     - ~/docker-volumes/openary/rabbitmq_data:/var/lib/rabbitmq
+     - ~/docker-volumes/openary/minio_data:/data
+     # ... 다른 볼륨들도 동일하게 변경
+   ```
+
+5. **Docker Compose 실행:**
+   ```bash
+   docker-compose -f openary-local-compose.yaml up -d
+   ```
+
+### 공통 명령어
+
+**서비스 상태 확인:**
+```bash
+docker-compose -f openary-local-compose.yaml ps
+```
+
+**로그 확인:**
+```bash
+# 모든 서비스 로그
+docker-compose -f openary-local-compose.yaml logs -f
+
+# 특정 서비스 로그
+docker-compose -f openary-local-compose.yaml logs -f opds-chatapi
+```
+
+**서비스 중지:**
+```bash
+docker-compose -f openary-local-compose.yaml down
+```
 
 #### 서비스 접속 URL
 
@@ -152,6 +237,8 @@ $env:OPDS_SECRET_KEY = "실제-시크릿-키"
 - **Ollama API**: http://localhost:11434
 
 #### 문제 해결
+
+### Windows
 
 **Docker Desktop이 시작되지 않는 경우:**
 ```powershell
@@ -168,4 +255,34 @@ netstat -ano | findstr :9000
 
 **볼륨 권한 문제가 발생하는 경우:**
 - Docker Desktop 설정에서 C:\ 드라이브 공유를 활성화하세요
-- 또는 WSL2 백엔드를 사용하세요 
+- 또는 WSL2 백엔드를 사용하세요
+
+### macOS
+
+**Docker Desktop이 시작되지 않는 경우:**
+```bash
+# Docker Desktop 재시작
+killall Docker && open /Applications/Docker.app
+```
+
+**포트 충돌이 발생하는 경우:**
+```bash
+# 사용 중인 포트 확인
+lsof -i :80
+lsof -i :9000
+
+# 특정 포트를 사용하는 프로세스 종료
+sudo kill -9 $(lsof -ti:80)
+```
+
+**볼륨 권한 문제가 발생하는 경우:**
+```bash
+# 볼륨 디렉토리 권한 설정
+chmod -R 755 ~/docker-volumes/openary/
+```
+
+**M1/M2 Mac에서 이미지 호환성 문제:**
+```bash
+# ARM64 호환 이미지 사용 또는 Rosetta 에뮬레이션
+docker-compose -f openary-local-compose.yaml up -d --platform linux/amd64
+``` 
