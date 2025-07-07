@@ -124,7 +124,7 @@ graph TB
 ### 1. 프로젝트 클론
 
 ```bash
-git clone https://github.com/your-username/Openary-onpremise.git
+git clone https://github.com/theprismdata/Openary-onpremise.git
 cd Openary-onpremise
 ```
 
