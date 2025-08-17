@@ -761,6 +761,160 @@ class UpdatePassword(Resource):
         else:
             return -1, err_msg
 
+@UserCode_NS.route('/sync_user')
+@UserCode_NS.response(400, 'BadRequest')
+@UserCode_NS.response(500, 'Internal Server Error')
+@UserCode_NS.response(503, 'Service Unavailable')
+class SyncUser(Resource):
+    @UserCode_NS.expect(user_email_model)
+    def post(self):
+        """
+        사용자 정보가 없는 시스템에 사용자 정보를 동기화합니다.
+        :param
+            email : 사용자 email
+        :return:
+        성공할 경우 {
+            "success": true,
+            "synced_systems": ["system1", "system2"],
+            "failed_systems": [],
+            "skipped_systems": ["system3", "system4"]
+        }
+        오류 발생시 {
+            "success": false,
+            "error": "error message"
+        }
+        """
+        param = request.json
+        logger.debug(param)
+        email = param["email"]
+        
+        # 1. MariaDB에서 사용자 정보 확인
+        status, user_info = self.get_user_info_from_mariadb(email)
+        if status != 0:
+            return {"success": False, "error": "User not found in MariaDB"}, 404
+            
+        # 2. 각 시스템 상태 확인 및 동기화
+        synced = []
+        failed = []
+        skipped = []
+        
+        try:
+            # MinIO 확인 및 동기화
+            mail_sha_code = make_sha_email(email)
+            minio_client = Minio(minio_address, access_key=accesskey, secret_key=secretkey, secure=False)
+            if mail_sha_code not in [bucket.name for bucket in minio_client.list_buckets()]:
+                try:
+                    minio_client.make_bucket(mail_sha_code)
+                    synced.append("minio")
+                except Exception as e:
+                    logger.error(f"MinIO 동기화 실패: {str(e)}")
+                    failed.append("minio")
+            else:
+                skipped.append("minio")
+                
+            # PGVector 확인 및 동기화
+            try:
+                vector_db = psycopg2.connect(
+                    host=vector_postgres['address'],
+                    dbname=vector_postgres['database'],
+                    user=vector_postgres['id'],
+                    password=vector_postgres['pwd'],
+                    port=vector_postgres['port']
+                )
+                vt_cs = vector_db.cursor()
+                vt_cs.execute(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{mail_sha_code}')")
+                exists = vt_cs.fetchone()[0]
+                
+                if not exists:
+                    create_table_sql = f'''CREATE TABLE public."{mail_sha_code}" (
+                        "source" varchar(512) NULL,
+                        "text" text NULL,
+                        vector public.vector NULL,
+                        id serial4 NOT NULL,
+                        doc_id int4 NULL,
+                        CONSTRAINT {mail_sha_code}_pk PRIMARY KEY (id)
+                    );'''
+                    vt_cs.execute(create_table_sql)
+                    vector_db.commit()
+                    synced.append("pgvector")
+                else:
+                    skipped.append("pgvector")
+                vector_db.close()
+            except Exception as e:
+                logger.error(f"PGVector 동기화 실패: {str(e)}")
+                failed.append("pgvector")
+                
+            # OpenSearch 확인 및 동기화
+            try:
+                client = get_opensearch_client()
+                if client and not client.indices.exists(index=mail_sha_code.lower()):
+                    success, msg = create_opensearch_index(mail_sha_code)
+                    if success:
+                        synced.append("opensearch")
+                    else:
+                        failed.append("opensearch")
+                else:
+                    skipped.append("opensearch")
+            except Exception as e:
+                logger.error(f"OpenSearch 동기화 실패: {str(e)}")
+                failed.append("opensearch")
+                
+            # Qdrant 확인 및 동기화
+            try:
+                client = get_qdrant_client()
+                if client:
+                    collections = client.get_collections()
+                    if mail_sha_code.lower() not in [col.name for col in collections.collections]:
+                        success, msg = create_qdrant_collection(mail_sha_code)
+                        if success:
+                            synced.append("qdrant")
+                        else:
+                            failed.append("qdrant")
+                    else:
+                        skipped.append("qdrant")
+            except Exception as e:
+                logger.error(f"Qdrant 동기화 실패: {str(e)}")
+                failed.append("qdrant")
+                
+            return {
+                "success": True,
+                "synced_systems": synced,
+                "failed_systems": failed,
+                "skipped_systems": skipped
+            }
+            
+        except Exception as e:
+            logger.error(f"동기화 중 오류 발생: {str(e)}")
+            return {"success": False, "error": str(e)}, 500
+    
+    def get_user_info_from_mariadb(self, email):
+        """MariaDB에서 사용자 정보를 가져옵니다."""
+        try:
+            mariadb_conn = pymysql.connect(
+                user=opds_system_db["id"],
+                password=opds_system_db["pwd"],
+                database=opds_system_db["database"],
+                host=opds_system_db["address"],
+                port=opds_system_db["port"]
+            )
+            cs = mariadb_conn.cursor()
+            sql = f'SELECT id, email, password, user_code FROM tb_user WHERE email="{email}"'
+            cs.execute(sql)
+            result = cs.fetchone()
+            mariadb_conn.close()
+            
+            if result:
+                return 0, {
+                    "id": result[0],
+                    "email": result[1],
+                    "password": result[2],
+                    "user_code": result[3]
+                }
+            return 1, None
+        except Exception as e:
+            logger.error(f"MariaDB 사용자 정보 조회 오류: {str(e)}")
+            return -1, str(e)
+
 @UserCode_NS.route('/get_usercode')
 @UserCode_NS.response(400, 'BadRequest')
 @UserCode_NS.response(500, 'Internal Server Error')
@@ -852,15 +1006,215 @@ class RegisterUser(Resource):
             return build_actual_response(jsonify(json_rtn))
 
 
-    def add_user(self, user_email, user_passwd):
-        auth_status, msg = check_exist_by_email(input_email=user_email, input_password=user_passwd)
-        if auth_status == 1: # 해당 사용자 없음.
-            minio_client = Minio(minio_address,
-                                 access_key=accesskey,
-                                 secret_key=secretkey, secure=False)
+    def check_user_exists_all_systems(self, user_email):
+        """모든 시스템에서 사용자 존재 여부를 확인합니다."""
+        mail_sha_code = make_sha_email(user_email)
+        exists = {
+            'mariadb': False,
+            'minio': False,
+            'pgvector': False,
+            'opensearch': False,
+            'qdrant': False
+        }
+        
+        # MariaDB 확인
+        try:
+            mariadb_conn = pymysql.connect(
+                user=opds_system_db["id"],
+                password=opds_system_db["pwd"],
+                database=opds_system_db["database"],
+                host=opds_system_db["address"],
+                port=opds_system_db["port"]
+            )
+            cs = mariadb_conn.cursor()
+            sql = f'SELECT COUNT(*) FROM tb_user WHERE email="{user_email}"'
+            cs.execute(sql)
+            count = cs.fetchone()[0]
+            exists['mariadb'] = count > 0
+            mariadb_conn.close()
+        except Exception as e:
+            logger.error(f"MariaDB 사용자 확인 오류: {str(e)}")
+            return False, f"MariaDB Error: {str(e)}"
 
-            # User information
-            try:
+        # MinIO 확인
+        try:
+            minio_client = Minio(minio_address, access_key=accesskey, secret_key=secretkey, secure=False)
+            exists['minio'] = mail_sha_code in [bucket.name for bucket in minio_client.list_buckets()]
+        except Exception as e:
+            logger.error(f"MinIO 사용자 확인 오류: {str(e)}")
+            return False, f"MinIO Error: {str(e)}"
+
+        # PGVector 확인
+        try:
+            vector_db = psycopg2.connect(
+                host=vector_postgres['address'],
+                dbname=vector_postgres['database'],
+                user=vector_postgres['id'],
+                password=vector_postgres['pwd'],
+                port=vector_postgres['port']
+            )
+            vt_cs = vector_db.cursor()
+            vt_cs.execute(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{mail_sha_code}')")
+            exists['pgvector'] = vt_cs.fetchone()[0]
+            vector_db.close()
+        except Exception as e:
+            logger.error(f"PGVector 사용자 확인 오류: {str(e)}")
+            return False, f"PGVector Error: {str(e)}"
+
+        # OpenSearch 확인
+        try:
+            client = get_opensearch_client()
+            if client:
+                exists['opensearch'] = client.indices.exists(index=mail_sha_code.lower())
+        except Exception as e:
+            logger.warning(f"OpenSearch 사용자 확인 오류 (무시됨): {str(e)}")
+
+        # Qdrant 확인
+        try:
+            client = get_qdrant_client()
+            if client:
+                collections = client.get_collections()
+                exists['qdrant'] = mail_sha_code.lower() in [col.name for col in collections.collections]
+        except Exception as e:
+            logger.warning(f"Qdrant 사용자 확인 오류 (무시됨): {str(e)}")
+
+        # 결과 분석
+        inconsistent = []
+        for system, exists_flag in exists.items():
+            if exists_flag:
+                inconsistent.append(system)
+        
+        if inconsistent:
+            return True, f"User exists in: {', '.join(inconsistent)}"
+        return False, None
+
+    def cleanup_user(self, user_email):
+        """사용자 정보를 모든 시스템에서 제거합니다."""
+        mail_sha_code = make_sha_email(user_email)
+        
+        # MariaDB 삭제
+        try:
+            mariadb_conn = pymysql.connect(
+                user=opds_system_db["id"],
+                password=opds_system_db["pwd"],
+                database=opds_system_db["database"],
+                host=opds_system_db["address"],
+                port=opds_system_db["port"]
+            )
+            cs = mariadb_conn.cursor()
+            sql = f"DELETE FROM tb_user WHERE email='{user_email}'"
+            cs.execute(sql)
+            mariadb_conn.commit()
+            mariadb_conn.close()
+        except Exception as e:
+            logger.error(f"MariaDB 사용자 삭제 오류: {str(e)}")
+
+        # MinIO 삭제
+        try:
+            minio_client = Minio(minio_address, access_key=accesskey, secret_key=secretkey, secure=False)
+            if mail_sha_code in [bucket.name for bucket in minio_client.list_buckets()]:
+                minio_client.remove_bucket(mail_sha_code)
+        except Exception as e:
+            logger.error(f"MinIO 사용자 삭제 오류: {str(e)}")
+
+        # PGVector 삭제
+        try:
+            vector_db = psycopg2.connect(
+                host=vector_postgres['address'],
+                dbname=vector_postgres['database'],
+                user=vector_postgres['id'],
+                password=vector_postgres['pwd'],
+                port=vector_postgres['port']
+            )
+            vt_cs = vector_db.cursor()
+            vt_cs.execute(f'DROP TABLE IF EXISTS public."{mail_sha_code}"')
+            vector_db.commit()
+            vector_db.close()
+        except Exception as e:
+            logger.error(f"PGVector 사용자 삭제 오류: {str(e)}")
+
+        # OpenSearch 삭제
+        try:
+            delete_opensearch_index(mail_sha_code)
+        except Exception as e:
+            logger.error(f"OpenSearch 사용자 삭제 오류: {str(e)}")
+
+        # Qdrant 삭제
+        try:
+            delete_qdrant_collection(mail_sha_code)
+        except Exception as e:
+            logger.error(f"Qdrant 사용자 삭제 오류: {str(e)}")
+
+    def add_user(self, user_email, user_passwd):
+        """사용자를 추가합니다."""
+        mail_sha_code = make_sha_email(user_email)
+        systems_status = {
+            'mariadb': {'exists': False, 'required': True},
+            'minio': {'exists': False, 'required': True},
+            'pgvector': {'exists': False, 'required': True},
+            'opensearch': {'exists': False, 'required': True},
+            'qdrant': {'exists': False, 'required':True}
+        }
+        
+        # 1. 각 시스템별 사용자 존재 여부 확인
+        try:
+            # MariaDB 확인
+            mariadb_conn = pymysql.connect(
+                user=opds_system_db["id"],
+                password=opds_system_db["pwd"],
+                database=opds_system_db["database"],
+                host=opds_system_db["address"],
+                port=opds_system_db["port"]
+            )
+            cs = mariadb_conn.cursor()
+            sql = f'SELECT COUNT(*) FROM tb_user WHERE email="{user_email}"'
+            cs.execute(sql)
+            count = cs.fetchone()[0]
+            systems_status['mariadb']['exists'] = count > 0
+            mariadb_conn.close()
+
+            # MinIO 확인
+            minio_client = Minio(minio_address, access_key=accesskey, secret_key=secretkey, secure=False)
+            systems_status['minio']['exists'] = mail_sha_code in [bucket.name for bucket in minio_client.list_buckets()]
+
+            # PGVector 확인
+            vector_db = psycopg2.connect(
+                host=vector_postgres['address'],
+                dbname=vector_postgres['database'],
+                user=vector_postgres['id'],
+                password=vector_postgres['pwd'],
+                port=vector_postgres['port']
+            )
+            vt_cs = vector_db.cursor()
+            vt_cs.execute(f"SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = '{mail_sha_code}')")
+            systems_status['pgvector']['exists'] = vt_cs.fetchone()[0]
+            vector_db.close()
+
+            # OpenSearch 확인
+            client = get_opensearch_client()
+            if client:
+                systems_status['opensearch']['exists'] = client.indices.exists(index=mail_sha_code.lower())
+
+            # Qdrant 확인
+            client = get_qdrant_client()
+            if client:
+                collections = client.get_collections()
+                systems_status['qdrant']['exists'] = mail_sha_code.lower() in [col.name for col in collections.collections]
+
+        except Exception as e:
+            logger.error(f"시스템 상태 확인 중 오류 발생: {str(e)}")
+            return -2, f"Error checking systems: {str(e)}"
+
+        # # 2. 필수 시스템 중 하나라도 존재하면 사용자가 이미 있는 것으로 판단
+        existing_systems = [sys for sys, status in systems_status.items() 
+                          if status['exists'] and status['required']]
+        # if existing_systems:
+        #     return 1, f"User exists in: {', '.join(existing_systems)}"
+
+        # 3. 각 시스템별로 사용자 정보 추가
+        try:
+            # MariaDB 추가
+            if not systems_status['mariadb']['exists']:
                 mariadb_conn = pymysql.connect(
                     user=opds_system_db["id"],
                     password=opds_system_db["pwd"],
@@ -872,76 +1226,76 @@ class RegisterUser(Resource):
                 h = hashlib.sha512()
                 h.update(user_passwd.encode())
                 encode_passwd = h.hexdigest()
-                mail_sha_code = make_sha_email(user_email)
-
-                sql = "INSERT INTO tb_user (email, password, user_code) VALUES ('{email}','{pwd}', '{user_code}')".format(
-                    email=user_email, pwd=encode_passwd, user_code=mail_sha_code)
-                cs.execute(sql)
+                sql = "INSERT INTO tb_user (email, password, user_code) VALUES (%s, %s, %s)"
+                cs.execute(sql, (user_email, encode_passwd, mail_sha_code))
                 mariadb_conn.commit()
                 mariadb_conn.close()
+                logger.info(f"MariaDB에 사용자 추가됨: {user_email}")
 
-                if mail_sha_code not in minio_client.list_buckets():
-                    minio_client.make_bucket(mail_sha_code)
-            except Exception as e:
-                logger.error(str(e))
-                print('Mgmt DB Connection critical error')
-                print(str(e))
-                return -2, str(e)
-            
-            # VectorDB (PostgreSQL)
-            try:
-                vector_db = psycopg2.connect(host=vector_postgres['address'],
-                                             dbname=vector_postgres['database'],
-                                             user=vector_postgres['id'],
-                                             password=vector_postgres['pwd'],
-                                             port=vector_postgres['port'])
+            # MinIO 추가
+            if not systems_status['minio']['exists']:
+                minio_client = Minio(minio_address, access_key=accesskey, secret_key=secretkey, secure=False)
+                minio_client.make_bucket(mail_sha_code)
+                logger.info(f"MinIO에 버킷 생성됨: {mail_sha_code}")
+
+            # PGVector 추가
+            if not systems_status['pgvector']['exists']:
+                vector_db = psycopg2.connect(
+                    host=vector_postgres['address'],
+                    dbname=vector_postgres['database'],
+                    user=vector_postgres['id'],
+                    password=vector_postgres['pwd'],
+                    port=vector_postgres['port']
+                )
+                vt_cs = vector_db.cursor()
+                
+                # vector 확장 존재 여부 확인 및 등록
+                vt_cs.execute("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector')")
+                vector_exists = vt_cs.fetchone()[0]
+                if not vector_exists:
+                    logger.info("vector 확장 등록 시작")
+                    vt_cs.execute("CREATE EXTENSION IF NOT EXISTS vector")
+                    vector_db.commit()
+                    logger.info("vector 확장 등록 완료")
+                
+                # 테이블 생성
                 create_table_sql = f'''CREATE TABLE public."{mail_sha_code}" (
                     "source" varchar(512) NULL,
                     "text" text NULL,
-                    vector public.vector NULL,
+                    vector vector NULL,
                     id serial4 NOT NULL,
                     doc_id int4 NULL,
                     CONSTRAINT {mail_sha_code}_pk PRIMARY KEY (id)
-                );
-                '''
-                vt_cs = vector_db.cursor()
-                print(create_table_sql)
+                );'''
                 vt_cs.execute(create_table_sql)
                 vector_db.commit()
                 vector_db.close()
-            except Exception as e:
-                logger.error(str(e))
-                print('PGVector critical error')
-                print(str(e))
-                return -2, str(e)
-            
-            # OpenSearch 인덱스 생성 (선택사항)
-            try:
-                success, msg = create_opensearch_index(mail_sha_code)
-                if success:
-                    logger.info(f"OpenSearch 인덱스 생성 성공: {mail_sha_code}")
+                logger.info(f"PGVector에 테이블 생성됨: {mail_sha_code}")
+
+            # OpenSearch 추가 (선택사항)
+            if not systems_status['opensearch']['exists']:
+                success_os, msg_os = create_opensearch_index(mail_sha_code)
+                if success_os:
+                    logger.info(f"OpenSearch에 인덱스 생성됨: {mail_sha_code}")
                 else:
-                    logger.warning(f"OpenSearch 인덱스 생성 실패하지만 계속 진행: {msg}")
-            except Exception as e:
-                logger.warning(f"OpenSearch 오류 발생하지만 계속 진행: {str(e)}")
-            
-            # Qdrant 컬렉션 생성 (선택사항)
-            try:
-                success, msg = create_qdrant_collection(mail_sha_code)
-                if success:
-                    logger.info(f"Qdrant 컬렉션 생성 성공: {mail_sha_code}")
+                    logger.warning(f"OpenSearch 인덱스 생성 실패 (무시됨): {msg_os}")
+
+            # Qdrant 추가 (선택사항)
+            if not systems_status['qdrant']['exists']:
+                success_qd, msg_qd = create_qdrant_collection(mail_sha_code)
+                if success_qd:
+                    logger.info(f"Qdrant에 컬렉션 생성됨: {mail_sha_code}")
                 else:
-                    logger.warning(f"Qdrant 컬렉션 생성 실패하지만 계속 진행: {msg}")
-            except Exception as e:
-                logger.warning(f"Qdrant 오류 발생하지만 계속 진행: {str(e)}")
-                
-            return 0, "ok" #정상 추가됨.
-        elif auth_status == -1: #암호 오류 (사용자가 존재하는데 다시 모르고 가입하려는 경우)
-            return -1, "Auth Fail"
-        elif auth_status == 0: # 사용자 존재함.
-            return 1, "User exist"
-        elif auth_status == -2: # email DB 검증 오류
-            return -2, f"DB Error {msg}"
+                    logger.warning(f"Qdrant 컬렉션 생성 실패 (무시됨): {msg_qd}")
+
+            return 0, "ok"  # 정상 추가됨
+
+        except Exception as e:
+            error_msg = str(e)
+            logger.error(f"사용자 추가 중 오류 발생: {error_msg}")
+            # 롤백 수행
+            self.cleanup_user(user_email)
+            return -2, f"Error: {error_msg}"
 
 
 if __name__ == "__main__":

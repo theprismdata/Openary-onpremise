@@ -197,3 +197,4 @@ build/
 # Uploaded files
 uploads/
 upload/
+OpenAry-RAG-Docker/openary-local-develop.yaml
