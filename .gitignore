@@ -198,3 +198,5 @@ build/
 uploads/
 upload/
 OpenAry-RAG-Docker/openary-local-develop.yaml
+OpenAry-RAG-API-Server/openary_front/nginx/docker_build.bat
+OpenAry-RAG-API-Server/openary_front/nginx/docker_build.sh
