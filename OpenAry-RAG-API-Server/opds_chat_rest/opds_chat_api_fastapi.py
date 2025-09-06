@@ -110,6 +110,7 @@ vector_opensearch = config['database']['vector_db_opensearch']
 vector_qdrant = config['database']['vector_db_qdrant']
 
 opds_system_db_info = config['database']['opds_system_db']
+logger.debug(f"opds_system_db_info: {opds_system_db_info}")
 
 mongo_host = config['database']['mongodb']['mongo_host']
 mongo_port = config['database']['mongodb']['mongo_port']

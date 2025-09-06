@@ -7,7 +7,8 @@ services:
       - "80:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - C:/temp/timezone:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Seoul
     restart: always
     depends_on:
       - openarychat-app
@@ -36,9 +37,9 @@ services:
       - "3000:3000"
     volumes:
       - ./config/svc-set.yaml:/config/svc-set.yaml:ro
-      - C:/temp/timezone:/etc/localtime:ro
     environment:
       - ENVIRONMENT=production
+      - TZ=Asia/Seoul
     restart: always
     depends_on:
       - opds-chatapi
@@ -54,7 +55,8 @@ services:
       - "9000:9000"
     volumes:
       - ./config/svc-set.yaml:/config/svc-set.yaml:ro
-      - C:/temp/timezone:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Seoul
     restart: always
     depends_on:
       - redis-stack
@@ -69,9 +71,15 @@ services:
     container_name: opds-mgmt
     ports:
       - "9001:9001"
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./config/svc-set.yaml:/config/svc-set.yaml:ro
-      - C:/temp/timezone:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Seoul
     restart: always
     depends_on:
       - redis-stack
@@ -85,7 +93,8 @@ services:
     container_name: opds-embedding
     volumes:
       - ./config/svc-set.yaml:/config/svc-set.yaml:ro
-      - C:/temp/timezone:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Seoul
     restart: always
     depends_on:
       - redis-stack
@@ -100,7 +109,8 @@ services:
     container_name: opds-preprocess
     volumes:
       - ./config/svc-set.yaml:/config/svc-set.yaml:ro
-      - C:/temp/timezone:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Seoul
     restart: always
     depends_on:
       - redis-stack
@@ -114,7 +124,8 @@ services:
     container_name: opds-summary
     volumes:
       - ./config/svc-set.yaml:/config/svc-set.yaml:ro
-      - C:/temp/timezone:/etc/localtime:ro
+    environment:
+      - TZ=Asia/Seoul
     restart: always
     depends_on:
       - redis-stack
@@ -130,6 +141,8 @@ services:
       - "11434:11434"
     volumes:
       - C:/temp/ollama_data:/root/.ollama
+    environment:
+      - TZ=Asia/Seoul
     restart: unless-stopped
     deploy:
       resources:
@@ -154,6 +167,8 @@ services:
     container_name: redis-stack
     ports:
       - "6379:6379"
+    environment:
+      - TZ=Asia/Seoul
     deploy:
       resources:
         limits:
@@ -174,11 +189,11 @@ services:
       - "5672:5672"    # AMQP protocol port
       - "15672:15672"  # Management UI port
     environment:
-      RABBITMQ_DEFAULT_USER: opds
-      RABBITMQ_DEFAULT_PASS: opds_pass
+      - RABBITMQ_DEFAULT_USER=opds
+      - RABBITMQ_DEFAULT_PASS=opds_pass
+      - TZ=Asia/Seoul
     volumes:
       - C:/temp/rabbitmq_data:/var/lib/rabbitmq
-      - C:/temp/timezone:/etc/localtime:ro
     restart: unless-stopped
     networks:
       - openary_network
@@ -191,12 +206,12 @@ services:
       - "9010:9000"    # API port
       - "9011:9001"    # Console port
     environment:
-      MINIO_ROOT_USER: opds
-      MINIO_ROOT_PASSWORD: opds_pass
+      - MINIO_ROOT_USER=opds
+      - MINIO_ROOT_PASSWORD=opds_pass
+      - TZ=Asia/Seoul
     command: minio server --console-address ":9001" /data
     volumes:
       - C:/temp/minio_data:/data
-      - C:/temp/timezone:/etc/localtime:ro
     deploy:
       resources:
         limits:
@@ -213,16 +228,16 @@ services:
     image: mariadb:latest
     container_name: mariadb
     environment:
-      MYSQL_ROOT_PASSWORD: openary
-      MYSQL_USER: genai
-      MYSQL_PASSWORD: openary
-      MYSQL_DATABASE: llm_dev
+      - MYSQL_ROOT_PASSWORD=openary
+      - MYSQL_USER=genai
+      - MYSQL_PASSWORD=openary
+      - MYSQL_DATABASE=llm_dev
+      - TZ=Asia/Seoul
     ports:
       - "3306:3306"
     volumes:
       - C:/temp/mariadb_data:/var/lib/mysql
       - ./mariadb_init:/docker-entrypoint-initdb.d
-      - C:/temp/timezone:/etc/localtime:ro
     restart: unless-stopped
     networks:
       - openary_network
@@ -231,15 +246,15 @@ services:
     image: ankane/pgvector:latest
     container_name: pgvector
     environment:
-      POSTGRES_USER: genai
-      POSTGRES_PASSWORD: openary
-      POSTGRES_DB: genai_svc_dev
+      - POSTGRES_USER=genai
+      - POSTGRES_PASSWORD=openary
+      - POSTGRES_DB=genai_svc_dev
+      - TZ=Asia/Seoul
     ports:
       - "5432:5432"
     volumes:
       - C:/temp/pgdata:/var/lib/postgresql/data
       - ./pgvector_init:/docker-entrypoint-initdb.d
-      - C:/temp/timezone:/etc/localtime:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U genai -d genai_svc_dev"]
       interval: 10s
@@ -253,15 +268,15 @@ services:
     image: mongo:latest
     container_name: mongodb
     environment:
-      MONGO_INITDB_ROOT_USERNAME: genai
-      MONGO_INITDB_ROOT_PASSWORD: openary
-      MONGO_INITDB_DATABASE: genai_svc_dev
+      - MONGO_INITDB_ROOT_USERNAME=genai
+      - MONGO_INITDB_ROOT_PASSWORD=openary
+      - MONGO_INITDB_DATABASE=genai_svc_dev
+      - TZ=Asia/Seoul
     ports:
       - "27017:27017"
     volumes:
       - C:/temp/mongodb_data:/data/db
       - ./mongo_init/mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
-      - C:/temp/timezone:/etc/localtime:ro
     command: mongod --auth
     healthcheck:
       test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/genai_svc_dev --quiet
@@ -281,18 +296,19 @@ services:
       - "6334:6334"    # gRPC port
     volumes:
       - C:/temp/qdrant_data:/qdrant/storage
-      - C:/temp/timezone:/etc/localtime:ro
     environment:
-      QDRANT__LOG_LEVEL: INFO
-      QDRANT__SERVICE__HOST: 0.0.0.0
-      QDRANT__SERVICE__HTTP_PORT: 6333
-      QDRANT__SERVICE__GRPC_PORT: 6334
-      QDRANT__STORAGE__STORAGE_PATH: /qdrant/storage
-      QDRANT__STORAGE__OPTIMIZERS_CONFIG__DEFAULT_SEGMENT_NUMBER: 2
-      QDRANT__STORAGE__OPTIMIZERS_CONFIG__MEMMAP_THRESHOLD: 20000
-      QDRANT__STORAGE__HNSW_CONFIG__ON_DISK: true
-      QDRANT__STORAGE__HNSW_CONFIG__M: 16
-      QDRANT__STORAGE__HNSW_CONFIG__EF_CONSTRUCT: 100
+      - TZ=Asia/Seoul
+      - QDRANT__LOG_LEVEL=INFO
+      - QDRANT__SERVICE__HOST=0.0.0.0
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__STORAGE__STORAGE_PATH=/qdrant/storage
+      - QDRANT__STORAGE__OPTIMIZERS_CONFIG__DEFAULT_SEGMENT_NUMBER=2
+      - QDRANT__STORAGE__OPTIMIZERS_CONFIG__MEMMAP_THRESHOLD=20000
+      - QDRANT__STORAGE__HNSW_CONFIG__ON_DISK=true
+      - QDRANT__STORAGE__HNSW_CONFIG__M=16
+      - QDRANT__STORAGE__HNSW_CONFIG__EF_CONSTRUCT=100
+      - QDRANT__SERVICE__API_KEY=qdrant_api_admin
     deploy:
       resources:
         limits:
@@ -329,6 +345,7 @@ services:
       - plugins.security.ssl.http.enabled=true
       - plugins.security.allow_unsafe_democertificates=true
       - plugins.security.allow_default_init_securityindex=true
+      - TZ=Asia/Seoul
     ulimits:
       memlock:
         soft: -1
@@ -341,7 +358,6 @@ services:
       - "9600:9600"    # Performance Analyzer port
     volumes:
       - C:/temp/opensearch_data:/usr/share/opensearch/data
-      - C:/temp/timezone:/etc/localtime:ro
     deploy:
       resources:
         limits:
@@ -367,13 +383,12 @@ services:
     ports:
       - "5601:5601"    # Dashboard port
     environment:
-      OPENSEARCH_HOSTS: '["https://opensearch:9200"]'
-      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "false"
-      OPENSEARCH_USERNAME: "admin"
-      OPENSEARCH_PASSWORD: "admin"
-      OPENSEARCH_SSL_VERIFICATIONMODE: "none"
-    volumes:
-      - C:/temp/timezone:/etc/localtime:ro
+      - OPENSEARCH_HOSTS=["https://opensearch:9200"]
+      - DISABLE_SECURITY_DASHBOARDS_PLUGIN=false
+      - OPENSEARCH_USERNAME=admin
+      - OPENSEARCH_PASSWORD=admin
+      - OPENSEARCH_SSL_VERIFICATIONMODE=none
+      - TZ=Asia/Seoul
     depends_on:
       - opensearch
     deploy:
@@ -414,4 +429,4 @@ volumes:
   qdrant_data:
     driver: local
   opensearch_data:
-    driver: local 
+    driver: local
