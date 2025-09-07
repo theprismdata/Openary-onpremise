@@ -587,6 +587,8 @@ class UploadResponse(BaseModel):
         response_description="JWT 액세스 토큰")
 def login_act(signin_data: UserInfo):
     try:
+        logger.debug(f"signin_data: {signin_data}")
+        
         with mariadb_manager.get_session() as db:
             user = db.query(User).filter(User.email == signin_data.email).first()
             if user is None:

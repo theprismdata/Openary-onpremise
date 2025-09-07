@@ -784,8 +784,8 @@ class SyncUser(Resource):
             "error": "error message"
         }
         """
+        logger.debug(f"sync_user:{request}")
         param = request.json
-        logger.debug(param)
         email = param["email"]
         
         # 1. MariaDB에서 사용자 정보 확인
