@@ -108,6 +108,9 @@ secretkey = minio_info['secretkey']
 vector_postgres = config['database']['vector_db_postgres']
 vector_opensearch = config['database']['vector_db_opensearch']
 vector_qdrant = config['database']['vector_db_qdrant']
+logger.debug(f"vector_postgres: {vector_postgres}")
+logger.debug(f"vector_opensearch: {vector_opensearch}")
+logger.debug(f"vector_qdrant: {vector_qdrant}")
 
 opds_system_db_info = config['database']['opds_system_db']
 logger.debug(f"opds_system_db_info: {opds_system_db_info}")
@@ -441,7 +444,148 @@ def web_search(query: str) -> str:
         logger.error(f"Tavily search error: {str(e)}")
         return "[]"
 
-tools = [web_search, serper_search]
+
+@tool
+def get_user_file_list(user_code: str) -> str:
+    """Get list of user's uploaded files with their processing status."""
+    try:
+        files = []
+        with mariadb_manager.get_session() as db:
+            query = text("""
+                SELECT id, filename, filesize, status, uploaded, summary, extract_page_rate, embedding_rate
+                FROM tb_llm_doc 
+                WHERE userid = :user_code
+                ORDER BY uploaded DESC
+            """)
+            result = db.execute(query, {"user_code": user_code})
+            
+            for row in result:
+                uploaded_date = row[4]
+                if isinstance(uploaded_date, datetime):
+                    formatted_date = uploaded_date.strftime("%Y-%m-%d %H:%M")
+                else:
+                    formatted_date = str(uploaded_date)
+                
+                files.append({
+                    "id": row[0],
+                    "filename": row[1],
+                    "filesize": row[2],
+                    "status": row[3],
+                    "uploaded": uploaded_date,
+                    "uploaded_formatted": formatted_date,
+                    "summary": row[5],
+                    "extract_page_rate": row[6],
+                    "embedding_rate": row[7]
+                })
+        
+        return json.dumps(files, ensure_ascii=False, default=str)
+    except Exception as e:
+        logger.error(f"Error getting user file list: {str(e)}")
+        return "[]"
+
+
+@tool
+def get_specific_file_info(user_code: str, filename: str) -> str:
+    """Get detailed information about a specific file."""
+    try:
+        with mariadb_manager.get_session() as db:
+            query = text("""
+                SELECT id, filename, filesize, status, uploaded, summary, extract_page_rate, embedding_rate
+                FROM tb_llm_doc 
+                WHERE userid = :user_code AND filename = :filename
+            """)
+            result = db.execute(query, {"user_code": user_code, "filename": filename})
+            row = result.fetchone()
+            
+            if row:
+                uploaded_date = row[4]
+                if isinstance(uploaded_date, datetime):
+                    formatted_date = uploaded_date.strftime("%Y-%m-%d %H:%M")
+                else:
+                    formatted_date = str(uploaded_date)
+                
+                file_info = {
+                    "id": row[0],
+                    "filename": row[1],
+                    "filesize": row[2],
+                    "status": row[3],
+                    "uploaded": uploaded_date,
+                    "uploaded_formatted": formatted_date,
+                    "summary": row[5],
+                    "extract_page_rate": row[6],
+                    "embedding_rate": row[7]
+                }
+                return json.dumps(file_info, ensure_ascii=False, default=str)
+            else:
+                return json.dumps({"error": "File not found"}, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error getting specific file info: {str(e)}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
+@tool
+def detect_file_request(question: str, user_code: str) -> str:
+    """Detect if the question is related to file operations and return analysis result using LLM."""
+    try:
+        # Get user files first
+        files_result = get_user_file_list(user_code)
+        user_files = json.loads(files_result) if files_result != "[]" else []
+        
+        if not user_files:
+            return json.dumps({
+                "is_file_related": False,
+                "reason": "No files found for user"
+            }, ensure_ascii=False)
+        
+        # Prepare file names for LLM analysis
+        file_names = [file["filename"] for file in user_files]
+        file_names_str = ", ".join(file_names)
+        
+        # Create a simple prompt for file request detection
+        prompt = f"""
+다음 사용자 질문이 파일 관련 요청인지 분석해주세요.
+
+사용자의 파일 목록: {file_names_str}
+
+사용자 질문: "{question}"
+
+다음 JSON 형식으로만 답변하세요:
+{{
+    "is_file_related": true/false,
+    "request_type": "file_list" 또는 "specific_file" 또는 "none",
+    "file_name": "언급된 파일명 또는 빈 문자열",
+    "file_request_type": "요약" 또는 "내용" 또는 "상태" 또는 "정보" 또는 "none",
+    "reason": "판단 이유를 간단히 설명"
+}}
+
+분석 기준:
+1. 파일 목록 요청: "파일 목록", "업로드한 파일", "내 문서들" 등
+2. 특정 파일 요청: 파일명이 직접 언급되거나 "report.pdf 요약", "문서 내용" 등
+3. 파일 관련이 아닌 경우: 일반적인 질문이나 외부 정보 요청
+"""
+
+        # Use the agent LLM for analysis
+        response = agent_llm.invoke(prompt)
+        analysis_text = response.content if hasattr(response, 'content') else str(response)
+        
+        # Extract JSON from response (in case LLM adds extra text)
+        import re
+        json_match = re.search(r'\{.*\}', analysis_text, re.DOTALL)
+        if json_match:
+            analysis_data = json.loads(json_match.group())
+        else:
+            analysis_data = json.loads(analysis_text)
+        
+        return json.dumps(analysis_data, ensure_ascii=False)
+            
+    except Exception as e:
+        logger.error(f"Error detecting file request: {str(e)}")
+        return json.dumps({
+            "is_file_related": False,
+            "error": str(e)
+        }, ensure_ascii=False)
+
+tools = [web_search, serper_search, get_user_file_list, get_specific_file_info, detect_file_request]
 
 # OpenAI 모델 설정
 agent_llm = ChatOpenAI(
@@ -995,6 +1139,7 @@ class HybridResponseStreamer:
         self.hybrid_response = ""
         self.rag_sources = []
         self.agent_search_results = []
+        self.agent_file_results = []
         self.rag_confidence = 0.0
         self.agent_confidence = 0.0
         self.intent_analyzer = LLMIntentAnalyzer(logger, llm_selector)
@@ -1379,11 +1524,22 @@ class HybridResponseStreamer:
         logger.debug("외부 검색(Agent) 시작")
 
         try:
-            self.agent_search_results = process_tool_calls(self.rqa.question)
+            tool_results = process_tool_calls(self.rqa.question, self.user_code)
+            
+            # 결과 구조 변경에 따른 처리
+            if isinstance(tool_results, dict):
+                self.agent_search_results = tool_results.get("search_results", [])
+                self.agent_file_results = tool_results.get("file_results", [])
+            else:
+                # 기존 형식 호환성 유지
+                self.agent_search_results = tool_results
+                self.agent_file_results = []
+            
             logger.debug(f"외부 검색 결과: {len(self.agent_search_results)} 항목")
+            logger.debug(f"파일 관련 결과: {len(self.agent_file_results)} 항목")
 
             # Agent 신뢰도 계산 (검색 결과 수와 관련성을 기반으로)
-            if len(self.agent_search_results) > 0:
+            if len(self.agent_search_results) > 0 or len(self.agent_file_results) > 0:
                 # 검색 결과 개수와 질문의 시간적 특성에 따른 신뢰도 조정
                 temporal_keywords = ["오늘", "최근", "지금", "현재", "이번"]
                 has_temporal = any(kw in self.rqa.question for kw in temporal_keywords)
@@ -2052,30 +2208,53 @@ class HybridResponseStreamer:
             is_file_list_request = False
             is_specific_file_request = False
 
-            # 특수 요청 감지 (파일 목록 등)
-            if self.intent_analyzer.is_file_list_request(self.rqa.question):
-                logger.debug("파일 목록 요청 감지됨")
-                # 파일 목록 응답 생성 (조기 반환하지 않고 저장만 함)
-                special_response = self.generate_file_list_response(user_files)
-                is_file_list_request = True
-
-            # 파일 관련 특정 요청 감지
-            if not is_file_list_request and user_files:
-                specific_file_request = self.intent_analyzer.get_specific_file_info(
-                    self.rqa.question, user_files
-                )
-                if specific_file_request.get("is_specific_file", False):
-                    file_name = specific_file_request.get("file_name", "")
-                    request_type = specific_file_request.get("request_type", "정보")
-
-                    # 파일 정보 가져오기
-                    file_info = self.get_file_by_name(file_name, user_files)
-
-                    if file_info:
-                        logger.debug(f"특정 파일 요청 감지: {file_name}, 요청 유형: {request_type}")
-                        # 특정 파일 응답 생성 (조기 반환하지 않고 저장만 함)
-                        special_response = self.generate_specific_file_response(file_info, request_type)
-                        is_specific_file_request = True
+            # Tool 기반 파일 요청 감지
+            try:
+                file_detection_result = detect_file_request(self.rqa.question, self.user_code)
+                detection_data = json.loads(file_detection_result)
+                
+                if detection_data.get("is_file_related", False):
+                    request_type = detection_data.get("request_type", "")
+                    
+                    if request_type == "file_list":
+                        logger.debug("파일 목록 요청 감지됨 (Tool 기반)")
+                        special_response = self.generate_file_list_response(user_files)
+                        is_file_list_request = True
+                        
+                    elif request_type == "specific_file":
+                        file_name = detection_data.get("file_name", "")
+                        file_request_type = detection_data.get("file_request_type", "정보")
+                        
+                        # Tool을 사용하여 특정 파일 정보 가져오기
+                        file_info_result = get_specific_file_info(self.user_code, file_name)
+                        file_info_data = json.loads(file_info_result)
+                        
+                        if "error" not in file_info_data:
+                            logger.debug(f"특정 파일 요청 감지: {file_name}, 요청 유형: {file_request_type} (Tool 기반)")
+                            special_response = self.generate_specific_file_response(file_info_data, file_request_type)
+                            is_specific_file_request = True
+                        else:
+                            logger.warning(f"파일 정보 조회 실패: {file_info_data.get('error', 'Unknown error')}")
+                            
+            except Exception as e:
+                logger.error(f"Tool 기반 파일 감지 중 오류: {str(e)}")
+                # 기존 방식으로 폴백
+                if self.intent_analyzer.is_file_list_request(self.rqa.question):
+                    logger.debug("파일 목록 요청 감지됨 (폴백)")
+                    special_response = self.generate_file_list_response(user_files)
+                    is_file_list_request = True
+                elif user_files:
+                    specific_file_request = self.intent_analyzer.get_specific_file_info(
+                        self.rqa.question, user_files
+                    )
+                    if specific_file_request.get("is_specific_file", False):
+                        file_name = specific_file_request.get("file_name", "")
+                        request_type = specific_file_request.get("request_type", "정보")
+                        file_info = self.get_file_by_name(file_name, user_files)
+                        if file_info:
+                            logger.debug(f"특정 파일 요청 감지: {file_name}, 요청 유형: {request_type} (폴백)")
+                            special_response = self.generate_specific_file_response(file_info, request_type)
+                            is_specific_file_request = True
 
             # 대화 기록 가져오기
             mongochat_history = MongoDBChatMessageHistory(
@@ -2209,6 +2388,33 @@ class HybridResponseStreamer:
             elif response_mode == "agent":
                 # Agent 방식으로 스트리밍
                 formatted_search_results = self._format_search_results(self.agent_search_results)
+                
+                # 파일 결과 처리
+                file_response = ""
+                if self.agent_file_results:
+                    for file_result in self.agent_file_results:
+                        if file_result["type"] == "file_detection":
+                            detection_data = file_result["data"]
+                            if detection_data.get("is_file_related", False):
+                                if detection_data.get("request_type") == "file_list":
+                                    user_files = self.get_user_files()
+                                    file_response = self.generate_file_list_response(user_files)
+                                elif detection_data.get("request_type") == "specific_file":
+                                    file_name = detection_data.get("file_name", "")
+                                    file_request_type = detection_data.get("file_request_type", "정보")
+                                    file_info = self.get_file_by_name(file_name)
+                                    if file_info:
+                                        file_response = self.generate_specific_file_response(file_info, file_request_type)
+                
+                # 파일 응답이 있으면 먼저 전송
+                if file_response:
+                    yield json.dumps({
+                        "content": file_response,
+                        "type": "chunk",
+                        "method": "agent"
+                    }) + "\n"
+                    full_response += file_response
+                
                 prompt = self.get_agent_prompt_template(llm_type)
 
                 # 방식 알림
@@ -2244,17 +2450,20 @@ class HybridResponseStreamer:
                     "method": "hybrid"
                 }) + "\n"
 
-                # 응답 스트리밍
-                for chunk in selected_llm.stream(prompt.format(
-                        input=self.rqa.question,
-                        context=context,
-                        search_results=formatted_search_results,
-                        history=conversation_history
-                )):
-                    content = chunk.content if hasattr(chunk, 'content') else str(chunk)
-                    full_response += content
-                    yield json.dumps({"content": content, "type": "chunk", "method": "hybrid"}) + "\n"
-
+                response = ""
+                try:
+                    for chunk in selected_llm.stream(prompt.format(
+                            input=self.rqa.question,
+                            context=context,
+                            search_results=formatted_search_results,
+                            history=conversation_history
+                    )):
+                        content = chunk.content if hasattr(chunk, 'content') else str(chunk)
+                        full_response += content
+                        yield json.dumps({"content": content, "type": "chunk", "method": "hybrid"}) + "\n"
+                except Exception as e:
+                    logger.error(f"LLM 호출 중 오류: {str(e)}")
+                    response = "하이브리드 응답 생성 중 오류가 발생했습니다."
                 # MongoDB에 하이브리드 응답 저장
                 self.save_to_mongodb(user_sessions_coll, full_response, "hybrid")
 
@@ -2302,7 +2511,7 @@ def rpa_stream(rqa: ChatRQA, token_data: dict = Depends(verify_token)):
     return StreamingResponse(streamer.generate(), media_type="text/event-stream")
 
 
-def process_tool_calls(question):
+def process_tool_calls(question, user_code=None):
     """도구 호출 처리 로직"""
     try:
         logger.debug(f"Question for search: {question}")
@@ -2310,13 +2519,39 @@ def process_tool_calls(question):
         logger.debug(f"Tool call results: {tool_call_results}")
 
         search_results = []
+        file_results = []
+        
         if tool_call_results:
             for result in tool_call_results:
                 if isinstance(result, dict) and "args" in result:
-                    # Tavily 검색
-                    tavily_results = web_search(result["args"])
-                    # Serper 검색
-                    serper_results = serper_search(result["args"])
+                    tool_name = result.get("name", "")
+                    tool_args = result.get("args", {})
+                    
+                    # 파일 관련 Tool 처리
+                    if tool_name == "detect_file_request" and user_code:
+                        file_detection = detect_file_request(question, user_code)
+                        file_results.append({
+                            "type": "file_detection",
+                            "data": json.loads(file_detection)
+                        })
+                    elif tool_name == "get_user_file_list" and user_code:
+                        file_list = get_user_file_list(user_code)
+                        file_results.append({
+                            "type": "file_list",
+                            "data": json.loads(file_list)
+                        })
+                    elif tool_name == "get_specific_file_info" and user_code and "filename" in tool_args:
+                        file_info = get_specific_file_info(user_code, tool_args["filename"])
+                        file_results.append({
+                            "type": "file_info",
+                            "data": json.loads(file_info)
+                        })
+                    else:
+                        # 기존 검색 Tool 처리
+                        # Tavily 검색
+                        tavily_results = web_search(tool_args.get("query", ""))
+                        # Serper 검색
+                        serper_results = serper_search(tool_args.get("query", ""))
 
                     try:
                         # Tavily 결과 처리
@@ -2342,11 +2577,18 @@ def process_tool_calls(question):
                         logger.error(f"Error parsing search results: {str(e)}")
 
         logger.debug(f"Processed search results: {search_results}")
-        return search_results
+        logger.debug(f"Processed file results: {file_results}")
+        return {
+            "search_results": search_results,
+            "file_results": file_results
+        }
 
     except Exception as e:
         logger.error(f"Search processing error: {str(e)}")
-        return []
+        return {
+            "search_results": [],
+            "file_results": []
+        }
 
 
 def send_json_post_qeury(url_path, method, body: dict):
